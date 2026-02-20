@@ -94,14 +94,18 @@ def print_roles(config: Config):
     for role in ModelRole:
         role_def = get_role_definition(role)
         
-        _, _, model_name, _ = config.get_role_config(role.value)
+        _, _, model_name, _, max_tokens = config.get_role_config(role.value)
         if not model_name:
             model_name = t("not_configured")
         
+        info = model_name
+        if max_tokens:
+            info += f"\n(Max Tokens: {max_tokens})"
+
         table.add_row(
             f"{get_role_name(role)}\n({role.value})",
             get_role_description(role),
-            model_name,
+            info,
         )
     
     console.print(table)
@@ -122,10 +126,13 @@ def show_config(config: Config):
 [bold]{t("role_config")}:[/bold]
 """
     for role in ModelRole:
-        _, _, model_name, _ = config.get_role_config(role.value)
+        _, _, model_name, _, max_tokens = config.get_role_config(role.value)
         if not model_name:
             model_name = t("not_configured")
-        config_text += f"  {get_role_name(role)} ({role.value}): {model_name}\n"
+        config_text += f"  {get_role_name(role)} ({role.value}): {model_name}"
+        if max_tokens:
+            config_text += f" (Max Tokens: {max_tokens})"
+        config_text += "\n"
 
     console.print(Panel(config_text, title=t("config_title"), border_style="cyan"))
 

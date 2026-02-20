@@ -242,7 +242,7 @@ class ChatSession:
                     response = await agent.client.chat_stream(
                         messages=compact_messages,
                         tools=tools,
-                        max_tokens=self.config.max_tokens,
+                        max_tokens=agent.max_tokens or self.config.max_tokens,
                         temperature=self.config.temperature,
                         on_content=on_content,
                         on_thinking=on_thinking,

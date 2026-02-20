@@ -72,7 +72,7 @@ class OpenAICompatibleClient(BaseClient):
         messages: list[Message],
         tools: Optional[list[ToolDefinition]] = None,
         max_tokens: int = 4096,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
     ) -> Message:
         converted_messages = self._convert_messages(messages)
         converted_tools = self._convert_tools(tools)
@@ -114,7 +114,7 @@ class OpenAICompatibleClient(BaseClient):
         messages: list[Message],
         tools: Optional[list[ToolDefinition]] = None,
         max_tokens: int = 4096,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
         on_content: Optional[Callable[[str], None]] = None,
         on_thinking: Optional[Callable[[str], None]] = None,
         on_tool_update: Optional[Callable[[str, str], None]] = None,

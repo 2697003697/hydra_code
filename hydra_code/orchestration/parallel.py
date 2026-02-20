@@ -65,8 +65,6 @@ class ArchitecturePlan:
     domain: str = "coding"
 
 
-from rich.live import Live
-
 class ParallelCollaborator:
     """Manages parallel execution with multiple model instances."""
     
@@ -875,7 +873,7 @@ class ParallelCollaborator:
                         messages=messages,
                         tools=[],
                         max_tokens=4096,
-                        temperature=0.7,
+                        temperature=0.0,
                         on_content=lambda c: session.update_content(c),
                         on_thinking=lambda t: session.update_thinking(t),
                     )
@@ -899,7 +897,7 @@ class ParallelCollaborator:
                         messages=messages,
                         tools=[],
                         max_tokens=4096,
-                        temperature=0.7,
+                        temperature=0.0,
                         on_content=on_content,
                     ),
                     timeout=timeout
@@ -936,7 +934,7 @@ class ParallelCollaborator:
                         messages=messages,
                         tools=tools,
                         max_tokens=4096,
-                        temperature=0.7,
+                        temperature=0.0,
                         on_content=lambda c: session.update_content(c),
                         on_thinking=lambda t: session.update_thinking(t),
                         on_tool_update=on_tool_update,
@@ -973,7 +971,7 @@ class ParallelCollaborator:
                         messages=messages,
                         tools=tools,
                         max_tokens=4096,
-                        temperature=0.7,
+                        temperature=0.0,
                         on_content=on_content,
                         on_tool_update=on_tool_update,
                     ),

@@ -67,10 +67,11 @@ class ConversationMemory:
             **kwargs
         )
         
-        if role == MessageType.USER:
-            msg.importance = 10
-        elif role == MessageType.TOOL:
-            msg.importance = 3
+        if importance == 0:
+            if role == MessageType.USER:
+                msg.importance = 10
+            elif role == MessageType.TOOL:
+                msg.importance = 3
         
         self.messages.append(msg)
         
@@ -82,9 +83,9 @@ class ConversationMemory:
     
     def _extract_key_info(self, content: str, role: MessageType):
         create_patterns = [
-            r'创建[了]?\s*[文件|项目|模块]',
-            r'新建[了]?\s*[文件|项目|模块]',
-            r'write_file.*?([^\s]+\.(py|js|ts|html|css|json))',
+            r'创建[了]?\s*(?:文件|项目|模块)\s*([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',
+            r'新建[了]?\s*(?:文件|项目|模块)\s*([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',
+            r'write_file.*?([^\s]+\.(?:py|js|ts|html|css|json))',
         ]
         
         for pattern in create_patterns:
@@ -96,9 +97,9 @@ class ConversationMemory:
                     self.files_created.append(match)
         
         modify_patterns = [
-            r'修改[了]?\s*[文件|代码|函数]',
-            r'更新[了]?\s*[文件|代码]',
-            r'edit_file.*?([^\s]+\.(py|js|ts|html|css|json))',
+            r'修改[了]?\s*(?:文件|代码|函数)\s*([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',
+            r'更新[了]?\s*(?:文件|代码)\s*([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',
+            r'edit_file.*?([^\s]+\.(?:py|js|ts|html|css|json))',
         ]
         
         for pattern in modify_patterns:
@@ -125,12 +126,9 @@ class ConversationMemory:
                         ))
     
     def _maybe_compress(self):
-        if len(self.messages) <= self.max_messages:
-            return
-        
         total_tokens = sum(m.token_count for m in self.messages)
         
-        if total_tokens > self.max_tokens:
+        if len(self.messages) > self.max_messages or total_tokens > self.max_tokens:
             self._compress_old_messages()
     
     def _compress_old_messages(self):
@@ -194,13 +192,28 @@ class ConversationMemory:
             files_context.append(f"已修改: {', '.join(self.files_modified[-5:])}")
         
         if files_context:
-            result.append({"role": "system", "content": "[文件操作] " + " | ".join(files_context)})
+            text = "[文件操作] " + " | ".join(files_context)
+            result.append({"role": "system", "content": text})
+            current_tokens += len(text) // 4
         
+        chat_messages = []
         for msg in reversed(self.messages):
             msg_tokens = msg.token_count
             
             if current_tokens + msg_tokens > max_tokens:
-                break
+                # Critical check: Are we splitting a tool-assistant pair?
+                # If the first message in our current context is a tool output,
+                # and the message we are about to skip is the assistant call,
+                # we MUST include it to avoid protocol errors (orphan tool outputs).
+                is_parent_assistant = (
+                    chat_messages and 
+                    chat_messages[0]['role'] == 'tool' and
+                    msg.role == MessageType.ASSISTANT and 
+                    msg.tool_calls
+                )
+                
+                if not is_parent_assistant:
+                    break
             
             role_map = {
                 MessageType.USER: "user",
@@ -219,10 +232,16 @@ class ConversationMemory:
             if msg.tool_call_id:
                 msg_dict["tool_call_id"] = msg.tool_call_id
             
-            result.insert(4 if len(result) > 3 else len(result), msg_dict)
+            chat_messages.insert(0, msg_dict)
             current_tokens += msg_tokens
-        
-        return result
+            
+        # Safety cleanup: Ensure we don't start with a tool message
+        # This handles cases where we broke in the middle of a tool chain
+        # or couldn't fit the assistant even with the soft limit logic above
+        while chat_messages and chat_messages[0]['role'] == 'tool':
+            chat_messages.pop(0)
+            
+        return result + chat_messages
     
     def get_compact_history(self) -> str:
         lines = []

@@ -17,6 +17,7 @@ class RoleConfig:
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model_name: Optional[str] = None
+    max_tokens: Optional[int] = None
 
 
 @dataclass
@@ -25,7 +26,7 @@ class Config:
     default_role: str = "fast"
     language: str = "zh"
     max_tokens: int = 4096
-    temperature: float = 0.7
+    temperature: float = 0.0
     working_directory: Optional[str] = None
     auto_approve: bool = False
     verbose: bool = False
@@ -43,13 +44,13 @@ class Config:
             "opus": RoleConfig(role="opus"),
         }
 
-    def get_role_config(self, role: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    def get_role_config(self, role: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[int]]:
         role_key = role.lower()
         config = self.role_configs.get(role_key)
         
         if not config:
-            return None, None, None, None
-        return config.api_key, config.base_url, config.model_name, "openai"
+            return None, None, None, None, None
+        return config.api_key, config.base_url, config.model_name, "openai", config.max_tokens
 
     def has_role_configured(self, role: str) -> bool:
         config = self.role_configs.get(role.lower())
@@ -101,16 +102,17 @@ def parse_config(data: dict) -> Config:
                 api_key=role_data.get("api_key"),
                 base_url=role_data.get("base_url"),
                 model_name=role_data.get("model_name"),
+                max_tokens=role_data.get("max_tokens"),
             )
 
     default_role = data.get("default_role", "fast")
 
     return Config(
         default_role=default_role,
-        role_configs=role_configs if role_configs else None,
+        role_configs=role_configs,
         language=data.get("language", "zh"),
         max_tokens=data.get("max_tokens", 4096),
-        temperature=data.get("temperature", 0.7),
+        temperature=data.get("temperature", 0.0),
         working_directory=data.get("working_directory"),
         auto_approve=data.get("auto_approve", False),
         verbose=data.get("verbose", False),
@@ -143,6 +145,8 @@ def save_config(config: Config) -> None:
             role_data["base_url"] = role_config.base_url
         if role_config.model_name:
             role_data["model_name"] = role_config.model_name
+        if role_config.max_tokens:
+            role_data["max_tokens"] = role_config.max_tokens
         if role_data:
             data["roles"][role_name] = role_data
 
@@ -162,7 +166,7 @@ default_role: fast
 language: zh
 
 max_tokens: 4096
-temperature: 0.7
+temperature: 0.0
 auto_approve: false
 verbose: false
 
@@ -171,26 +175,31 @@ single_model_mode: false
 
 # Role configurations
 # Each role needs: api_key, base_url, model_name
+# Optional: max_tokens (overrides global max_tokens)
 roles:
   fast:
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"
+    max_tokens: 4096
 
   pro:
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"
+    max_tokens: 4096
 
   sonnet:
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"
+    max_tokens: 4096
 
   opus:
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"
+    max_tokens: 4096
 """
 
     with open(config_path, "w", encoding="utf-8") as f:

@@ -85,7 +85,7 @@ class BaseClient(ABC):
         messages: list[Message],
         tools: Optional[list[ToolDefinition]] = None,
         max_tokens: int = 4096,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
     ) -> Message:
         pass
 
@@ -95,7 +95,7 @@ class BaseClient(ABC):
         messages: list[Message],
         tools: Optional[list[ToolDefinition]] = None,
         max_tokens: int = 4096,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
         on_content: Optional[Callable[[str], None]] = None,
         on_thinking: Optional[Callable[[str], None]] = None,
         on_tool_update: Optional[Callable[[str, str], None]] = None,  # (tool_name, json_chunk)

@@ -85,6 +85,7 @@ class ModelAgent:
     model_name: str
     client: Any
     is_busy: bool = False
+    max_tokens: Optional[int] = None
 
 
 ROUTING_PROMPT = """你是 Fast 模型，负责判断用户请求的复杂度和任务类型：
@@ -331,7 +332,7 @@ class DynamicCoordinator:
     
     def _setup_agents(self):
         for role in ModelRole:
-            api_key, base_url, model_name, provider = self.config.get_role_config(role.value)
+            api_key, base_url, model_name, provider, max_tokens = self.config.get_role_config(role.value)
             
             if api_key and base_url and model_name:
                 client = create_client(
@@ -344,6 +345,7 @@ class DynamicCoordinator:
                     role=role,
                     model_name=model_name,
                     client=client,
+                    max_tokens=max_tokens,
                 )
 
     async def _analyze_request(self, text: str) -> RoutingResult:
@@ -978,7 +980,7 @@ class DynamicCoordinator:
             return Message(role=Role.ASSISTANT, content=f"Error: {e}")
     
     async def _call_agent(self, agent: ModelAgent, messages: list[Message], max_tokens: int = None) -> str:
-        tokens = max_tokens or self.config.max_tokens
+        tokens = max_tokens or agent.max_tokens or self.config.max_tokens
         stats.record_call(role=agent.role.value)
         
         try:

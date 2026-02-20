@@ -26,6 +26,7 @@ class ModelClient:
     role: ModelRole
     model_name: str
     client: Any
+    max_tokens: Optional[int] = None
 
 
 @dataclass
@@ -54,7 +55,7 @@ class MultiModelOrchestrator:
 
     def _setup_clients(self):
         for role in ModelRole:
-            api_key, base_url, model_name, provider = self.config.get_role_config(role.value)
+            api_key, base_url, model_name, provider, max_tokens = self.config.get_role_config(role.value)
             
             if api_key and base_url and model_name:
                 client = create_client(
@@ -67,6 +68,7 @@ class MultiModelOrchestrator:
                     role=role,
                     model_name=model_name,
                     client=client,
+                    max_tokens=max_tokens,
                 )
 
     def _get_system_prompt(self, role: ModelRole) -> str:
@@ -241,9 +243,9 @@ class MultiModelOrchestrator:
                 response = await model_client.client.chat_stream(
                     messages=messages,
                     tools=tools,
-                    max_tokens=self.config.max_tokens,
+                    max_tokens=model_client.max_tokens or self.config.max_tokens,
                     temperature=self.config.temperature,
-                    on_content=lambda c: stream_buffer.append(c),
+                    on_content=on_content,
                 )
             
             execution_time = time.time() - start_time

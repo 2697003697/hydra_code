@@ -201,14 +201,64 @@ class EditFileTool(Tool):
             with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            if old_content not in content:
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error=f"Could not find the content to replace in {path}",
-                )
+            if old_content in content:
+                new_file_content = content.replace(old_content, new_content, 1)
+            else:
+                # Try flexible matching (ignore leading/trailing whitespace per line)
+                lines = content.splitlines()
+                old_lines = old_content.splitlines()
+                
+                # Normalize lines for comparison (strip whitespace)
+                norm_lines = [l.strip() for l in lines]
+                norm_old_lines = [l.strip() for l in old_lines]
+                
+                # Find the start index
+                found_idx = -1
+                if not norm_old_lines:
+                     return ToolResult(success=False, output="", error="Old content is empty")
 
-            new_file_content = content.replace(old_content, new_content, 1)
+                # Simple sliding window search on normalized lines
+                # This is O(N*M) but files are usually small enough for this tool
+                if norm_old_lines:
+                    for i in range(len(norm_lines) - len(norm_old_lines) + 1):
+                        match = True
+                        for j in range(len(norm_old_lines)):
+                            if norm_lines[i+j] != norm_old_lines[j]:
+                                match = False
+                                break
+                        if match:
+                            found_idx = i
+                            break
+                
+                if found_idx != -1:
+                    # Found a match! Reconstruct the file
+                    # We need to replace lines[found_idx : found_idx + len(old_lines)]
+                    # with new_content
+                    
+                    # Check if new_content ends with newline to maintain file structure if needed
+                    # But usually new_content is a block. 
+                    # We should join the lines before and after.
+                    
+                    # Be careful: new_content might be a string with newlines, not a list of lines.
+                    # We should just insert new_content string.
+                    
+                    pre_content = "\n".join(lines[:found_idx])
+                    if found_idx > 0:
+                        pre_content += "\n" # Restore newline after pre-content
+                        
+                    post_content = "\n".join(lines[found_idx + len(old_lines):])
+                    if found_idx + len(old_lines) < len(lines):
+                        post_content = "\n" + post_content # Restore newline before post-content
+                        
+                    new_file_content = pre_content + new_content + post_content
+                else:
+                    # Final fallback: Try ignoring all whitespace (risky but useful for minified code or messy formats)
+                    # For now, let's stick to line-based normalization as it's safer.
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=f"Could not find the content to replace in {path}. Tried exact match and line-based whitespace-insensitive match.",
+                    )
 
             with open(path, "w", encoding="utf-8") as f:
                 f.write(new_file_content)
