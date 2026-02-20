@@ -147,21 +147,21 @@ roles:
   fast:
     api_key: "your-key"
     base_url: "https://api.example.com/v1"
-    model_name: "gpt-4"
+    model_name: "example"
 
   pro:
     api_key: "your-key"
     base_url: "https://api.example.com/v1"
-    model_name: "gpt-4"
+    model_name: "example"
 
   sonnet:
     api_key: "your-key"
     base_url: "https://api.example.com/v1"
-    model_name: "gpt-4"
+    model_name: "example"
 
   opus:
     api_key: "your-key"
     base_url: "https://api.example.com/v1"
-    model_name: "gpt-4"
+    model_name: "example"
 
 ```
