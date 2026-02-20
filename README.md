@@ -33,12 +33,11 @@ pip install -e .
 > 
 > 解决方法：
 > 1. 将报错信息中提示的路径（例如 `...\Python313\Scripts`）添加到系统环境变量 Path 中。
-> 2. 或者直接在项目根目录下运行 `.\hydra.bat`（我已为你创建此快捷方式）。
-> 3. 或者继续使用 `python -m hydra_code`。
+> 2. 或者继续使用 `python -m hydra_code`。
 
 ## 配置
 
-在 `~/.hydra-code` 创建配置文件（首次运行 `hydra --init` 会自动创建）：
+在 `~/.hydra-code` 创建配置文件（首次运行 `hydra --init` 会自动创建），将其中的示例更改为自己的api密钥和模型名称：
 
 ```yaml
 default_role: fast
