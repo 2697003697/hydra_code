@@ -14,6 +14,7 @@ import yaml
 @dataclass
 class RoleConfig:
     role: str
+    provider: str = "openai"
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model_name: Optional[str] = None
@@ -50,7 +51,7 @@ class Config:
         
         if not config:
             return None, None, None, None, None
-        return config.api_key, config.base_url, config.model_name, "openai", config.max_tokens
+        return config.api_key, config.base_url, config.model_name, config.provider, config.max_tokens
 
     def has_role_configured(self, role: str) -> bool:
         config = self.role_configs.get(role.lower())
@@ -99,6 +100,7 @@ def parse_config(data: dict) -> Config:
         for role_name, role_data in data["roles"].items():
             role_configs[role_name.lower()] = RoleConfig(
                 role=role_name.lower(),
+                provider=role_data.get("provider", "openai"),
                 api_key=role_data.get("api_key"),
                 base_url=role_data.get("base_url"),
                 model_name=role_data.get("model_name"),
@@ -139,6 +141,8 @@ def save_config(config: Config) -> None:
 
     for role_name, role_config in config.role_configs.items():
         role_data = {}
+        if role_config.provider != "openai":
+            role_data["provider"] = role_config.provider
         if role_config.api_key:
             role_data["api_key"] = role_config.api_key
         if role_config.base_url:
@@ -175,27 +179,31 @@ single_model_mode: false
 
 # Role configurations
 # Each role needs: api_key, base_url, model_name
-# Optional: max_tokens (overrides global max_tokens)
+# Optional: provider (default: openai), max_tokens
 roles:
   fast:
+    provider: "openai" # or azure, deepseek, etc.
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"
     max_tokens: 4096
 
   pro:
+    provider: "openai" # or azure, deepseek, etc.
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"
     max_tokens: 4096
 
   sonnet:
+    provider: "openai" # or azure, deepseek, etc.
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"
     max_tokens: 4096
 
   opus:
+    provider: "openai" # or azure, deepseek, etc.
     api_key: "your-api-key"
     base_url: "https://api.example.com/v1"
     model_name: "model-name"

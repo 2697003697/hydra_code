@@ -35,6 +35,7 @@ class ToolResult:
 class Message:
     role: Role
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_results: list[ToolResult] = field(default_factory=list)
     tool_call_id: Optional[str] = None
@@ -44,6 +45,9 @@ class Message:
 
         if self.content:
             result["content"] = self.content
+            
+        if self.reasoning_content:
+            result["reasoning_content"] = self.reasoning_content
 
         if self.tool_calls:
             result["tool_calls"] = [

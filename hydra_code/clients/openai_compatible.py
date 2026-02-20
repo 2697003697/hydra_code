@@ -7,7 +7,7 @@ import json
 from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 from rich.console import Console
 
 from .base import BaseClient, Message, Role, ToolCall, ToolDefinition
@@ -22,16 +22,27 @@ class OpenAICompatibleClient(BaseClient):
         base_url: str,
         model_name: str,
         enable_reasoning: bool = True,
+        provider: str = "openai",
     ):
         self.api_key = api_key
         self.base_url = base_url
         self.model_name = model_name
         self.enable_reasoning = enable_reasoning
-        self._client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            http_client=httpx.AsyncClient(timeout=120.0),
-        )
+        self.provider = provider.lower()
+        
+        if self.provider == "azure":
+             self._client = AsyncAzureOpenAI(
+                api_key=api_key,
+                azure_endpoint=base_url,
+                api_version="2024-05-01-preview", # Default version, maybe should be configurable
+                http_client=httpx.AsyncClient(timeout=120.0),
+            )
+        else:
+            self._client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                http_client=httpx.AsyncClient(timeout=120.0),
+            )
 
     def _convert_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
         result = []
@@ -88,11 +99,14 @@ class OpenAICompatibleClient(BaseClient):
             kwargs["tools"] = converted_tools
         
         if self.enable_reasoning:
-            kwargs["extra_body"] = {
-                "enable_thinking": True,
-            }
-            if "deepseek" in self.base_url.lower():
-                kwargs["reasoning_effort"] = "high"
+            # DeepSeek specific handling
+            if self.provider == "deepseek" or "deepseek" in self.base_url.lower():
+                 kwargs["reasoning_effort"] = "high"
+            # Generic thinking enabling (if supported by provider via extra_body)
+            else:
+                kwargs["extra_body"] = {
+                    "enable_thinking": True,
+                }
 
         response = await self._client.chat.completions.create(**kwargs)
 
@@ -102,10 +116,15 @@ class OpenAICompatibleClient(BaseClient):
 
         if choice.message.tool_calls:
             tool_calls = self._parse_tool_calls(choice.message.tool_calls)
+        
+        reasoning_content = None
+        if hasattr(choice.message, "reasoning_content"):
+            reasoning_content = choice.message.reasoning_content
 
         return Message(
             role=Role.ASSISTANT,
             content=content,
+            reasoning_content=reasoning_content,
             tool_calls=tool_calls or [],
         )
 
@@ -133,9 +152,8 @@ class OpenAICompatibleClient(BaseClient):
         if converted_tools:
             kwargs["tools"] = converted_tools
         
-        # 移除 extra_body 中的 enable_thinking，因为并非所有模型都支持
-        # 且推理模型通常不需要在 extra_body 中显式启用 thinking
-        if self.enable_reasoning and "deepseek" in self.base_url.lower():
+        # DeepSeek reasoning effort handling
+        if self.enable_reasoning and (self.provider == "deepseek" or "deepseek" in self.base_url.lower()):
              kwargs["reasoning_effort"] = "high"
 
         stream = await self._client.chat.completions.create(**kwargs)
@@ -192,6 +210,7 @@ class OpenAICompatibleClient(BaseClient):
                                 on_tool_update(current_tool["name"], tc.function.arguments)
 
         content = "".join(content_parts) or None
+        reasoning_content = "".join(thinking_parts) or None
         tool_calls = []
         
         # 从 map 中构建最终的 tool_calls 列表
@@ -219,6 +238,7 @@ class OpenAICompatibleClient(BaseClient):
         return Message(
             role=Role.ASSISTANT,
             content=content,
+            reasoning_content=reasoning_content,
             tool_calls=tool_calls,
         )
 
@@ -238,4 +258,5 @@ def create_client(
         base_url=base_url,
         model_name=model_name,
         enable_reasoning=enable_reasoning,
+        provider=provider,
     )
