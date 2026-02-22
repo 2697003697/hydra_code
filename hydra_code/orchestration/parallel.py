@@ -611,9 +611,12 @@ class ParallelCollaborator:
                             result = await tool.execute(tool_call.arguments, self.working_dir)
                             status = "[green]✓[/green]" if result.success else "[red]✗[/red]"
                             console.print(f"[dim]│ {tool_call.name} {status}[/dim]")
+                            tool_content = result.output if result.success else result.error
+                            if len(tool_content) > 8000:
+                                tool_content = tool_content[:8000] + "\n... [内容已截断]"
                             messages.append(Message(
                                 role=Role.TOOL,
-                                content=result.output if result.success else result.error,
+                                content=tool_content,
                                 tool_call_id=tool_call.id,
                             ))
                         except Exception as e:
@@ -711,9 +714,12 @@ class ParallelCollaborator:
                     try:
                         result = await tool.execute(tool_call.arguments, self.working_dir)
                         ui.print_tool_output(result.output if result.success else str(result.error), result.success)
+                        tool_content = result.output if result.success else result.error
+                        if len(tool_content) > 8000:
+                            tool_content = tool_content[:8000] + "\n... [内容已截断]"
                         messages.append(Message(
                             role=Role.TOOL,
-                            content=result.output if result.success else result.error,
+                            content=tool_content,
                             tool_call_id=tool_call.id,
                         ))
                     except Exception as e:
@@ -895,9 +901,12 @@ class ParallelCollaborator:
                         try:
                             result = await tool.execute(tool_call.arguments, self.working_dir)
                             ui.print_tool_output(result.output if result.success else str(result.error), result.success)
+                            tool_content = result.output if result.success else result.error
+                            if len(tool_content) > 8000:
+                                tool_content = tool_content[:8000] + "\n... [内容已截断]"
                             messages.append(Message(
                                 role=Role.TOOL,
-                                content=result.output if result.success else result.error,
+                                content=tool_content,
                                 tool_call_id=tool_call.id,
                             ))
                         except Exception as e:

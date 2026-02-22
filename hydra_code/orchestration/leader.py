@@ -359,7 +359,10 @@ Leader 分配给你一个任务：
                     ui.print_tool_start(tool_call.name, tool_call.arguments)
                     res = await tool.execute(tool_call.arguments, self.working_dir)
                     ui.print_tool_output(res.output if res.success else str(res.error), res.success)
-                    messages.append(Message(role=Role.TOOL, content=res.output if res.success else str(res.error), tool_call_id=tool_call.id))
+                    tool_content = res.output if res.success else str(res.error)
+                    if len(tool_content) > 8000:
+                        tool_content = tool_content[:8000] + "\n... [内容已截断]"
+                    messages.append(Message(role=Role.TOOL, content=tool_content, tool_call_id=tool_call.id))
                 else:
                     messages.append(Message(role=Role.TOOL, content=f"Error: Unknown tool {tool_call.name}", tool_call_id=tool_call.id))
         

@@ -12,7 +12,7 @@ from .base import Tool, ToolResult
 
 class ReadFileTool(Tool):
     name = "read_file"
-    description = "Read the contents of a file from the local filesystem. Use this to read file contents."
+    description = "Read the contents of a file. Use offset and limit to read in chunks. If file is larger than limit, use offset to continue reading from where you left off."
 
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -27,11 +27,11 @@ class ReadFileTool(Tool):
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "The line number to start reading from (1-indexed). Default is 1.",
+                        "description": "The line number to start reading from (1-indexed). Default is 1. Use offset > 1 to read from middle of file.",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of lines to read. Default is 2000.",
+                        "description": "Maximum number of lines to read. Default is 500. Larger values may cause issues. Use offset to read more.",
                     },
                 },
                 "required": ["file_path"],
@@ -44,7 +44,7 @@ class ReadFileTool(Tool):
             file_path = arguments.get("path", "")
             
         offset = arguments.get("offset", 1)
-        limit = arguments.get("limit", 2000)
+        limit = arguments.get("limit", 500)
 
         path = Path(file_path)
         if not path.is_absolute():
@@ -60,13 +60,27 @@ class ReadFileTool(Tool):
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
 
+            total_lines = len(lines)
+            
             start = max(0, offset - 1)
-            end = min(len(lines), start + limit)
+            end = min(total_lines, start + limit)
             selected_lines = lines[start:end]
+            
+            has_more = end < total_lines
+            has_prev = start > 0
 
             output = ""
             for i, line in enumerate(selected_lines, start=offset):
                 output += f"{i:6d}\t{line}"
+            
+            info_parts = []
+            info_parts.append(f"第 {start + 1}-{end} 行 / 共 {total_lines} 行")
+            if has_prev:
+                info_parts.append(f"上一页: offset={max(1, offset - limit)}")
+            if has_more:
+                info_parts.append(f"下一页: offset={end + 1}")
+            
+            output += f"\n\n[{', '.join(info_parts)}]"
 
             return ToolResult(success=True, output=output)
         except PermissionError:
@@ -363,9 +377,16 @@ class SearchFilesTool(Tool):
             return ToolResult(success=False, output="", error=f"Directory not found: {path}")
 
         try:
-            matches = list(path.glob(pattern))
+            all_matches = list(path.glob(pattern))
+            total = len(all_matches)
+            matches = all_matches[:100]
             output_lines = [str(m.relative_to(path)) for m in sorted(matches)]
-            return ToolResult(success=True, output="\n".join(output_lines))
+            
+            output = "\n".join(output_lines)
+            if total > 100:
+                output += f"\n\n[... 共 {total} 个文件，仅显示前 100 个]"
+            
+            return ToolResult(success=True, output=output)
         except PermissionError:
             return ToolResult(
                 success=False,

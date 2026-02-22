@@ -600,6 +600,8 @@ class DynamicCoordinator:
                             self.work_history.add_file_modified(tool_call.arguments.get("file_path", ""))
                 
                 tool_result_content = result.output if result.success else f"Error: {result.error}"
+                if len(tool_result_content) > 8000:
+                    tool_result_content = tool_result_content[:8000] + "\n... [内容已截断]"
                 messages.append(Message(
                     role=Role.TOOL,
                     content=tool_result_content,

@@ -76,6 +76,9 @@ class RunCommandTool(Tool):
 
             success = process.returncode == 0
             output = f"[Exit code: {process.returncode}]\n{output}"
+            
+            if len(output) > 8000:
+                output = output[:8000] + f"\n... [输出已截断，原始长度: {len(output)} 字符]"
 
             return ToolResult(success=success, output=output.strip())
         except PermissionError as e:

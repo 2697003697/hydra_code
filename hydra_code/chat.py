@@ -373,6 +373,9 @@ class ChatSession:
 
             tool_result_content = result.output if result.success else f"Error: {result.error}"
             
+            if len(tool_result_content) > 8000:
+                tool_result_content = tool_result_content[:8000] + "\n... [内容已截断]"
+            
             self.memory.add_message(MessageType.TOOL, tool_result_content[:500])
 
             self.messages.append(Message(
