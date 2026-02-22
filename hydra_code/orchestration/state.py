@@ -4,9 +4,10 @@ Enables models to share context, discoveries, and track progress.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Set
 from collections import defaultdict
 import time
+import threading
 
 from .communication import (
     ModelMessage,
@@ -33,6 +34,55 @@ class TaskProgress:
     updated_at: float = field(default_factory=time.time)
 
 
+class FileLockManager:
+    """Manages file locks to prevent concurrent modifications."""
+    def __init__(self):
+        self._locks: dict[str, str] = {}  # file_path -> owner_role
+        self._lock_times: dict[str, float] = {}
+        self._lock_reasons: dict[str, str] = {}
+        self._mutex = threading.Lock()
+
+    def acquire(self, file_path: str, owner: str, reason: str = "") -> bool:
+        with self._mutex:
+            if file_path in self._locks:
+                if self._locks[file_path] == owner:
+                    return True  # Already owned
+                return False  # Locked by someone else
+            
+            self._locks[file_path] = owner
+            self._lock_times[file_path] = time.time()
+            self._lock_reasons[file_path] = reason
+            return True
+
+    def release(self, file_path: str, owner: str) -> bool:
+        with self._mutex:
+            if file_path in self._locks and self._locks[file_path] == owner:
+                del self._locks[file_path]
+                del self._lock_times[file_path]
+                del self._lock_reasons[file_path]
+                return True
+            return False
+
+    def is_locked(self, file_path: str) -> bool:
+        with self._mutex:
+            return file_path in self._locks
+
+    def get_owner(self, file_path: str) -> Optional[str]:
+        with self._mutex:
+            return self._locks.get(file_path)
+            
+    def get_all_locks(self) -> dict[str, dict]:
+        with self._mutex:
+            return {
+                path: {
+                    "owner": owner,
+                    "reason": self._lock_reasons.get(path, ""),
+                    "duration": time.time() - self._lock_times.get(path, 0)
+                }
+                for path, owner in self._locks.items()
+            }
+
+
 @dataclass
 class SharedContext:
     user_request: str
@@ -43,6 +93,7 @@ class SharedContext:
     discoveries: list[Discovery] = field(default_factory=list)
     decisions: list[dict[str, Any]] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
+    active_files: Set[str] = field(default_factory=set)  # Files currently being worked on
     
     def add_file_context(self, path: str, content: str, by_role: str):
         self.files_read[path] = content
@@ -69,18 +120,24 @@ class SharedContext:
         
         parts.append(f"原始请求: {self.user_request}")
         
+        # Add active file locks info
+        if self.active_files:
+            parts.append(f"\n当前活跃文件 (请勿冲突): {', '.join(self.active_files)}")
+
         if self.discoveries:
-            parts.append("\n已发现的信息:")
-            for d in self.discoveries[-5:]:
-                parts.append(f"  [{d.discoverer}] {d.content[:200]}")
+            parts.append("\n已发现的信息 (最新 10 条):")
+            # Sort by confidence or relevance if possible, for now just recent
+            relevant = sorted(self.discoveries, key=lambda d: d.confidence, reverse=True)[:10]
+            for d in relevant:
+                parts.append(f"  [{d.discoverer}] {d.content[:300]}")
         
         if self.decisions:
-            parts.append("\n已做出的决策:")
-            for dec in self.decisions[-3:]:
+            parts.append("\n关键决策:")
+            for dec in self.decisions[-5:]:
                 parts.append(f"  [{dec['by']}] {dec['decision']}")
         
         if self.files_read:
-            parts.append(f"\n已读取的文件: {', '.join(self.files_read.keys())}")
+            parts.append(f"\n已读取的文件: {', '.join(list(self.files_read.keys())[:10])}")
         
         return "\n".join(parts)
 
@@ -99,6 +156,8 @@ class CollaborationState:
         self.max_iterations: int = 10
         self.is_complete: bool = False
         self.final_result: Optional[str] = None
+        self.file_locks = FileLockManager()
+
     
     def broadcast(self, message: ModelMessage):
         self.message_queue.append(message)

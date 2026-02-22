@@ -5,7 +5,9 @@
 ## 功能特性
 
 - **动态多模型协作**：多个 AI 模型协同完成复杂任务
+- **模型库管理**：集中管理所有 API 配置，一键切换
 - **基于角色的任务分配**：每个模型都有特定角色（Fast, Pro, Sonnet, Opus）
+- **实时切换**：运行时动态调整角色对应的模型
 - **工具支持**：文件操作、命令执行、代码库搜索
 - **灵活配置**：为任何角色配置任何模型
 
@@ -37,36 +39,43 @@ pip install -e .
 
 ## 配置
 
-在 `~/.hydra-code` 创建配置文件（首次运行 `hydra --init` 会自动创建），将其中的示例更改为自己的api密钥和模型名称：
+在 `~/.hydra-code` 创建配置文件（首次运行 `hydra --init` 会自动创建）。
+
+你可以配置**模型库 (models)**，然后在**角色 (roles)** 中引用它们：
 
 ```yaml
 default_role: fast
-
 max_tokens: 4096
 temperature: 0.7
 auto_approve: false
 verbose: false
 
+# 1. 定义模型库（存储所有可用的 API 配置）
+models:
+  deepseek-official:
+    provider: deepseek
+    api_key: "sk-..."
+    base_url: "https://api.deepseek.com"
+    model_name: "deepseek-chat"
+    description: "DeepSeek 官方接口"
+
+  gpt-4-azure:
+    provider: azure
+    api_key: "..."
+    base_url: "https://my-azure.openai.azure.com"
+    model_name: "gpt-4"
+    description: "Azure 美东区域"
+
+# 2. 分配角色（引用上面的模型名称，或直接配置）
 roles:
-  fast:
-    api_key: "your-api-key"
-    base_url: "https://api.example.com/v1"
-    model_name: "model-name"
-
-  pro:
-    api_key: "your-api-key"
-    base_url: "https://api.example.com/v1"
-    model_name: "model-name"
-
-  sonnet:
-    api_key: "your-api-key"
-    base_url: "https://api.example.com/v1"
-    model_name: "model-name"
-
+  fast: deepseek-official  # 引用模型库
+  pro: gpt-4-azure         # 引用模型库
+  sonnet: deepseek-official
   opus:
-    api_key: "your-api-key"
-    base_url: "https://api.example.com/v1"
-    model_name: "model-name"
+    # 也可以直接在这里配置（旧方式）
+    provider: openai
+    api_key: "sk-..."
+    model_name: "gpt-4"
 ```
 
 ## 使用方法
@@ -84,9 +93,55 @@ hydra
 # 显示当前配置
 hydra --config
 
-# 多模型协作（无需手动确认）
+# 协作模式
 
-/complex
+## Leader 模式 (推荐)
+由一个 Leader 模型统筹全局，分发任务给其他 Worker 模型。适合复杂任务。
+```bash
+/leader          # 默认使用 Opus 作为 Leader
+/leader sonnet   # 指定 Sonnet 作为 Leader
+```
+
+## 并行模式
+多个模型并行工作，适合无明显依赖的任务。
+```bash
+/parallel
+```
+
+## 自动模式（推荐）
+根据任务特征智能选择执行策略，支持多维度分析：
+
+```bash
+/auto
+```
+
+### 路由分析维度
+Auto 模式会分析以下三个维度：
+
+| 维度 | 取值 | 说明 |
+|------|------|------|
+| **复杂度** | `simple` / `moderate` / `complex` | 决定使用单模型还是 Leader 协作 |
+| **领域** | `coding` / `content` / `general` | 影响 Leader 的策略偏好 |
+| **意图** | `new` / `modify` / `qa` | 影响代码修改方式 |
+
+### 执行策略
+
+| 复杂度 | 执行方式 | 模型选择 |
+|--------|----------|----------|
+| `simple` | 单模型快速响应 | Fast → Sonnet → Opus |
+| `moderate` / `complex` | Leader 协作模式 | Opus → Sonnet → Pro |
+
+### 领域感知
+Leader 会根据任务领域调整策略：
+- **coding**: 严格遵守代码规范，确保代码可运行
+- **content**: 侧重于结构清晰、语言优美
+- **general**: 直接回答问题，必要时调用工具验证
+
+### 意图感知
+Leader 会根据用户意图调整行为：
+- **new**: 从头设计实现，确保架构合理
+- **modify**: 先理解现有代码，只修改必要部分，保持风格一致
+- **qa**: 提供准确详尽的解答
 
 ```
 
@@ -97,6 +152,7 @@ hydra --config
 | `/help` | 显示帮助信息 |
 | `/roles` | 显示角色配置 |
 | `/config` | 显示当前配置 |
+| `/models` | 列出或管理模型配置 |
 | `/clear` | 清除对话历史 |
 | `/context` | 显示代码库上下文 |
 | `/status` | 显示协作状态 |

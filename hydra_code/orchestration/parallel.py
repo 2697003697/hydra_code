@@ -18,6 +18,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from rich.table import Table
 
 from .roles import ModelRole
+from .state import CollaborationState
 from ..clients import Message, Role
 from ..tools import ToolRegistry
 from .. import stats
@@ -90,7 +91,33 @@ class ParallelCollaborator:
         self._progress_current = 0
         self._progress_total = 0
         self.todo_list = TodoList(title="Architecture Plan")
+        self.state: Optional[CollaborationState] = None
     
+    async def _acquire_lock(self, task: ParallelTask, module: ModuleSpec) -> bool:
+        """Acquire file lock for module."""
+        if not self.state:
+            return True
+            
+        # Lock the module name as a resource key
+        file_key = module.name
+        
+        # Try to acquire lock
+        if self.state.file_locks.acquire(file_key, task.role.value, reason=f"Implementing {module.name}"):
+            self.state.shared_context.active_files.add(file_key)
+            return True
+            
+        return False
+
+    def _release_lock(self, task: ParallelTask, module: ModuleSpec):
+        """Release file lock for module."""
+        if not self.state:
+            return
+            
+        file_key = module.name
+        if self.state.file_locks.release(file_key, task.role.value):
+            if file_key in self.state.shared_context.active_files:
+                self.state.shared_context.active_files.remove(file_key)
+
     def _update_progress(self, phase: str, task: str, current: int = 0, total: int = 0):
         self._current_phase = phase
         self._current_task = task
@@ -124,6 +151,9 @@ class ParallelCollaborator:
         context: str = "",
     ) -> str:
         """Execute parallel collaboration workflow."""
+        
+        # Initialize state
+        self.state = CollaborationState(user_request, self.working_dir)
         
         self._update_progress("架构设计", "正在分析需求...", 0, 3)
         
@@ -389,6 +419,25 @@ class ParallelCollaborator:
                 completed_modules += len(batch)
                 self._update_progress("并行实现", f"已完成 {completed_modules}/{total_modules} 模块", completed_modules, total_modules)
     
+    async def _handle_discovery(self, task: ParallelTask, content: str, context: str):
+        """Parse and store discovery."""
+        match = re.search(r'\[DISCOVERY:\s*(\w+)\](.*?)(?=\[|$)', content, re.DOTALL)
+        if match:
+            discovery_type = match.group(1).strip()
+            discovery_content = match.group(2).strip()
+            
+            from .communication import Discovery
+            discovery = Discovery(
+                discoverer=task.role.value,
+                discovery_type=discovery_type,
+                content=discovery_content,
+                relevance=["general"],
+            )
+            
+            if self.state:
+                self.state.share_discovery(discovery)
+                console.print(f"[green]  Discovery shared: {discovery_content[:50]}...[/green]")
+
     async def _execute_module(
         self,
         task: ParallelTask,
@@ -408,142 +457,181 @@ class ParallelCollaborator:
             ui.print_tool_result(module.name, False, f"找不到 {task.role.value} 模型")
             return
         
-        task.status = TaskStatus.IN_PROGRESS
-        self._update_todo_item(module.name, task.status)
-        if monitor:
-            monitor.update_task(module.name, "Starting...")
-        console.print(f"[cyan]╭─ {module.name} ({task.role.value}) ─{'─' * (30 - len(module.name))}[/cyan]")
-        
-        interface_info = self._build_interface_info(module)
-        
-        tech_stack_instruction = ""
-        if self.architecture and self.architecture.tech_stack:
-            tech_stack_instruction = f"统一技术栈/风格要求: {self.architecture.tech_stack}\n请严格遵守此要求。"
-
-        if self.domain == "content":
-            prompt = f"""撰写以下章节。
-
-用户需求: {user_request}
-你的任务: {module.description}
-章节名: {module.name}
-要点: {module.interface}
-{tech_stack_instruction}
-
-上下文:
-{context}
-
-要求:
-1. 确保内容风格统一
-2. 遵循大纲结构
-3. 使用 write_file 将内容保存为 Markdown 文件 ({module.name}.md)
-
-请使用工具完成创作。"""
-
-            messages = [
-                Message(role=Role.SYSTEM, content=f"你是专业内容创作者，角色是 {task.role.value}。负责撰写 {module.name}。"),
-                Message(role=Role.USER, content=prompt)
-            ]
-        else:
-            prompt = f"""实现以下模块。
-
-用户需求: {user_request}
-你的任务: {module.description}
-模块名: {module.name}
-接口定义: {module.interface}
-{tech_stack_instruction}
-
-依赖接口:
-{interface_info}
-
-上下文:
-{context}
-
-要求:
-1. 实现完整的代码
-2. 遵循接口定义
-3. 使用工具读取/写入文件
-4. 如果遇到困难，可以请求其他模型帮助
-
-请使用工具完成代码实现。"""
-
-            messages = [
-                Message(role=Role.SYSTEM, content=f"你是 {task.role.value} 模型，负责实现 {module.name} 模块。你可以使用所有工具。"),
-                Message(role=Role.USER, content=prompt)
-            ]
-        
-        tools = self.tool_registry.get_all_definitions()
-        
-        max_iterations = 15
-        tool_calls_count = 0
-        
-        for i in range(max_iterations):
-            step_msg = f"Step {i+1}/{max_iterations}"
-            console.print(f"[dim]│[/dim] {step_msg}...", end="\r")
+        # Try to acquire lock
+        max_lock_retries = 10
+        lock_acquired = False
+        for _ in range(max_lock_retries):
+            if await self._acquire_lock(task, module):
+                lock_acquired = True
+                break
             if monitor:
-                monitor.update_task(module.name, step_msg)
+                monitor.update_task(module.name, "Waiting for lock...")
+            await asyncio.sleep(1)
             
-            response = await self._call_agent_with_tools(
-                agent, 
-                messages, 
-                tools, 
-                use_live_stream=False,
-                monitor=monitor,
-                task_name=module.name
-            )
-            messages.append(response)
+        if not lock_acquired:
+            task.status = TaskStatus.FAILED
+            self._update_todo_item(module.name, task.status)
+            task.issues.append(f"无法获取文件锁: {module.name}")
+            console.print(f"[red]Could not acquire lock for {module.name}[/red]")
+            return
+
+        try:
+            task.status = TaskStatus.IN_PROGRESS
+            self._update_todo_item(module.name, task.status)
+            if monitor:
+                monitor.update_task(module.name, "Starting...")
+            console.print(f"[cyan]╭─ {module.name} ({task.role.value}) ─{'─' * (30 - len(module.name))}[/cyan]")
             
-            if response.content and response.content.startswith("Error:"):
-                console.print(f"[red]│ {response.content}[/red]")
+            interface_info = self._build_interface_info(module)
             
-            if not response.tool_calls:
-                if "[REQUEST_HELP" in response.content:
-                    console.print(f"[magenta]│ 请求帮助...[/magenta]")
-                    if monitor:
-                        monitor.update_task(module.name, "Requesting Help")
-                    help_result = await self._handle_help_request(task, response.content, context)
-                    if help_result:
-                        messages.append(Message(role=Role.USER, content=f"帮助结果: {help_result}"))
-                        continue
+            # Build shared context info
+            shared_ctx_info = ""
+            if self.state:
+                shared_ctx_info = self.state.shared_context.get_relevant_context(task.role.value, f"Implement {module.name}")
+            
+            tech_stack_instruction = ""
+            if self.architecture and self.architecture.tech_stack:
+                tech_stack_instruction = f"统一技术栈/风格要求: {self.architecture.tech_stack}\n请严格遵守此要求。"
+    
+            if self.domain == "content":
+                prompt = f"""撰写以下章节。
                 
-                task.code_output = response.content
-                task.status = TaskStatus.COMPLETED
-                task.result = f"{module.name} 实现完成"
-                self._update_todo_item(module.name, task.status)
-                console.print(f"[cyan]╰─ [green]✓[/green] {module.name} 完成 ({tool_calls_count} 次工具调用)[/cyan]")
-                if monitor:
-                    monitor.update_task(module.name, "Completed")
-                return
+                用户需求: {user_request}
+                你的任务: {module.description}
+                章节名: {module.name}
+                要点: {module.interface}
+                {tech_stack_instruction}
+                
+                上下文:
+                {context}
+                
+                共享协作状态 (注意避免文件冲突):
+                {shared_ctx_info}
+                
+                要求:
+                1. 确保内容风格统一
+                2. 遵循大纲结构
+                3. 使用 write_file 将内容保存为 Markdown 文件 ({module.name}.md)
+                
+                请使用工具完成创作。"""
+    
+                messages = [
+                    Message(role=Role.SYSTEM, content=f"你是专业内容创作者，角色是 {task.role.value}。负责撰写 {module.name}。"),
+                    Message(role=Role.USER, content=prompt)
+                ]
+            else:
+                prompt = f"""实现以下模块。
+                
+                用户需求: {user_request}
+                你的任务: {module.description}
+                模块名: {module.name}
+                接口定义: {module.interface}
+                {tech_stack_instruction}
+                
+                依赖接口:
+                {interface_info}
+                
+                上下文:
+                {context}
+                
+                共享协作状态 (注意避免文件冲突):
+                {shared_ctx_info}
+                
+                要求:
+                1. 实现完整的代码
+                2. 遵循接口定义
+                3. 使用工具读取/写入文件 (推荐文件名: {module.name}.py 或对应后缀)
+                4. 如果遇到困难，可以请求其他模型帮助
+                
+                请使用工具完成代码实现。"""
+    
+                messages = [
+                    Message(role=Role.SYSTEM, content=f"你是 {task.role.value} 模型，负责实现 {module.name} 模块。你可以使用所有工具。"),
+                    Message(role=Role.USER, content=prompt)
+                ]
             
-            for tool_call in response.tool_calls:
-                tool_calls_count += 1
-                tool = self.tool_registry.get(tool_call.name)
-                if tool:
-                    console.print(f"[dim]│ {tool_call.name}...[/dim]")
+            tools = self.tool_registry.get_all_definitions()
+            
+            max_iterations = 15
+            tool_calls_count = 0
+            
+            for i in range(max_iterations):
+                step_msg = f"Step {i+1}/{max_iterations}"
+                console.print(f"[dim]│[/dim] {step_msg}...", end="\r")
+                if monitor:
+                    monitor.update_task(module.name, step_msg)
+                
+                response = await self._call_agent_with_tools(
+                    agent, 
+                    messages, 
+                    tools, 
+                    use_live_stream=False,
+                    monitor=monitor,
+                    task_name=module.name
+                )
+                messages.append(response)
+                
+                if response.content and response.content.startswith("Error:"):
+                    console.print(f"[red]│ {response.content}[/red]")
+                
+                if not response.tool_calls:
+                    if "[REQUEST_HELP" in response.content:
+                        console.print(f"[magenta]│ 请求帮助...[/magenta]")
+                        if monitor:
+                            monitor.update_task(module.name, "Requesting Help")
+                        help_result = await self._handle_help_request(task, response.content, context)
+                        if help_result:
+                            messages.append(Message(role=Role.USER, content=f"帮助结果: {help_result}"))
+                            continue
+                    
+                    if "[DISCOVERY" in response.content:
+                         await self._handle_discovery(task, response.content, context)
+
+                    task.code_output = response.content
+                    task.status = TaskStatus.COMPLETED
+                    task.result = f"{module.name} 实现完成"
+                    self._update_todo_item(module.name, task.status)
+                    console.print(f"[cyan]╰─ [green]✓[/green] {module.name} 完成 ({tool_calls_count} 次工具调用)[/cyan]")
                     if monitor:
-                        monitor.update_task(module.name, f"Tool: {tool_call.name}")
-                    try:
-                        result = await tool.execute(tool_call.arguments, self.working_dir)
-                        status = "[green]✓[/green]" if result.success else "[red]✗[/red]"
-                        console.print(f"[dim]│ {tool_call.name} {status}[/dim]")
-                        messages.append(Message(
-                            role=Role.TOOL,
-                            content=result.output if result.success else result.error,
-                            tool_call_id=tool_call.id,
-                        ))
-                    except Exception as e:
-                        console.print(f"[dim]│ {tool_call.name} [red]✗[/red] {e}[/dim]")
-                        messages.append(Message(
-                            role=Role.TOOL,
-                            content=f"工具执行错误: {e}",
-                            tool_call_id=tool_call.id,
-                        ))
-        
-        task.status = TaskStatus.FAILED
-        self._update_todo_item(module.name, task.status)
-        task.issues.append("达到最大迭代次数")
-        console.print(f"[cyan]╰─ [red]✗[/red] {module.name} 失败 (达到最大迭代次数)[/cyan]")
-        if monitor:
-            monitor.update_task(module.name, "Failed (Max Steps)")
+                        monitor.update_task(module.name, "Completed")
+                    return
+                
+                # Check for discovery even with tool calls
+                if "[DISCOVERY" in response.content:
+                     await self._handle_discovery(task, response.content, context)
+
+                for tool_call in response.tool_calls:
+                    tool_calls_count += 1
+                    tool = self.tool_registry.get(tool_call.name)
+                    if tool:
+                        console.print(f"[dim]│ {tool_call.name}...[/dim]")
+                        if monitor:
+                            monitor.update_task(module.name, f"Tool: {tool_call.name}")
+                        try:
+                            result = await tool.execute(tool_call.arguments, self.working_dir)
+                            status = "[green]✓[/green]" if result.success else "[red]✗[/red]"
+                            console.print(f"[dim]│ {tool_call.name} {status}[/dim]")
+                            messages.append(Message(
+                                role=Role.TOOL,
+                                content=result.output if result.success else result.error,
+                                tool_call_id=tool_call.id,
+                            ))
+                        except Exception as e:
+                            console.print(f"[dim]│ {tool_call.name} [red]✗[/red] {e}[/dim]")
+                            messages.append(Message(
+                                role=Role.TOOL,
+                                content=f"工具执行错误: {e}",
+                                tool_call_id=tool_call.id,
+                            ))
+            
+            task.status = TaskStatus.FAILED
+            self._update_todo_item(module.name, task.status)
+            task.issues.append("达到最大迭代次数")
+            console.print(f"[cyan]╰─ [red]✗[/red] {module.name} 失败 (达到最大迭代次数)[/cyan]")
+            if monitor:
+                monitor.update_task(module.name, "Failed (Max Steps)")
+        finally:
+            self._release_lock(task, module)
     
     async def _repair_module(
         self,
@@ -552,40 +640,57 @@ class ParallelCollaborator:
         user_request: str,
         context: str,
     ):
-        """Repair a failed module using Opus."""
+        """Repair a failed module using Opus with reflection."""
         opus = self.agents.get(ModelRole.OPUS)
         if not opus:
             opus = self.agents.get(ModelRole.PRO)
         if not opus:
             return
         
-        console.print(f"[yellow]╭─ 修复 {module.name} ─{'─' * (30 - len(module.name))}[/yellow]")
+        console.print(f"[yellow]╭─ 修复 {module.name} (Reflective Repair) ─{'─' * (30 - len(module.name))}[/yellow]")
         
-        prompt = f"""修复以下失败的模块。
-
-用户需求: {user_request}
-模块名: {module.name}
-模块描述: {module.description}
-接口定义: {module.interface}
-
-之前的错误:
-{chr(10).join(task.issues) if task.issues else '达到最大迭代次数'}
-
-上下文:
-{context}
-
-请使用工具直接创建这个模块需要的所有文件。不要解释，直接写代码！"""
-
+        # Step 1: Analyze Failure
+        analysis_prompt = f"""分析 {module.name} 模块失败的原因。
+        
+        用户需求: {user_request}
+        模块描述: {module.description}
+        接口定义: {module.interface}
+        
+        之前的错误日志:
+        {chr(10).join(task.issues) if task.issues else '达到最大迭代次数'}
+        
+        上下文:
+        {context}
+        
+        请简要分析失败原因，并提出具体的修复计划。不要写代码，只分析。"""
+        
         messages = [
-            Message(role=Role.SYSTEM, content="你是专家，负责修复失败的模块。直接使用工具创建文件，不要废话。"),
-            Message(role=Role.USER, content=prompt)
+            Message(role=Role.SYSTEM, content="你是专家，负责诊断并修复失败的模块。首先分析问题。"),
+            Message(role=Role.USER, content=analysis_prompt)
         ]
+        
+        analysis = await self._call_agent(opus, messages, use_live_stream=False)
+        console.print(f"[dim]分析: {analysis[:200]}...[/dim]")
+        
+        messages.append(Message(role=Role.ASSISTANT, content=analysis))
+        
+        # Step 2: Execute Fix
+        fix_prompt = f"""基于以上分析，请直接修复该模块。
+        
+        要求:
+        1. 使用工具创建或修改必要的文件。
+        2. 确保符合接口定义。
+        3. 解决分析中指出的问题。
+        
+        请直接行动。"""
+        
+        messages.append(Message(role=Role.USER, content=fix_prompt))
         
         tools = self.tool_registry.get_all_definitions()
         
-        max_iterations = 10
+        max_iterations = 15
         for i in range(max_iterations):
-            console.print(f"[dim]│ 等待响应 ({i+1}/{max_iterations})...[/dim]", end="\r")
+            console.print(f"[dim]│ 修复执行 ({i+1}/{max_iterations})...[/dim]", end="\r")
             response = await self._call_agent_with_tools(opus, messages, tools)
             messages.append(response)
             
@@ -595,6 +700,7 @@ class ParallelCollaborator:
             if not response.tool_calls:
                 task.code_output = response.content
                 task.status = TaskStatus.COMPLETED
+                task.result = f"{module.name} 修复成功"
                 console.print(f"[yellow]╰─ [green]✓[/green] {module.name} 修复成功[/yellow]")
                 return
             
@@ -825,17 +931,20 @@ class ParallelCollaborator:
     
     def _build_interface_info(self, module: ModuleSpec) -> str:
         """Build interface info from dependencies."""
-        # Find modules this module depends on
+        if not self.architecture or not self.architecture.interfaces:
+            return "无依赖接口定义"
+            
         info = []
+        for name, interface in self.architecture.interfaces.items():
+            if name != module.name:
+                info.append(f"\n[{name}] 接口定义:\n{interface}")
+                
+                # Check if implementation exists
+                task = self._find_task_by_module_name(name)
+                if task and task.code_output:
+                     info.append(f"实现参考:\n{task.code_output[:500]}...")
         
-        for task in self.tasks.values():
-            if task.status == TaskStatus.COMPLETED and task.code_output:
-                other_module = self._find_module_by_task(task)
-                if other_module and other_module.name != module.name:
-                    info.append(f"\n{other_module.name} 接口:\n{other_module.interface}")
-                    info.append(f"实现:\n{task.code_output[:1000]}...")
-        
-        return "\n".join(info) if info else "无依赖"
+        return "\n".join(info) if info else "无其他模块接口"
     
     def _find_task_by_module_name(self, name: str) -> Optional[ParallelTask]:
         for i, module in enumerate(self.architecture.modules if self.architecture else []):

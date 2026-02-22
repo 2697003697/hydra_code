@@ -62,6 +62,12 @@ ROLE_DEFINITIONS: dict[ModelRole, RoleDefinition] = {
   ]
 }
 ```
+
+协作指南:
+1. 在开始工作前，请仔细阅读 SharedContext 中的"当前活跃文件"和"已发现的信息"。
+2. 如果遇到无法解决的问题，请使用 `[REQUEST_HELP: role] 问题描述` 请求帮助。
+3. 如果发现重要信息，请使用 `[DISCOVERY: type] 内容` 分享。type 可选: bug, pattern, decision, general。
+4. 注意避免修改其他模型正在使用的文件（见 SharedContext）。
 """,
     ),
     ModelRole.PRO: RoleDefinition(
@@ -87,6 +93,12 @@ ROLE_DEFINITIONS: dict[ModelRole, RoleDefinition] = {
 4. 整合其他专家的输出
 
 你需要产出高质量、结构清晰的代码和文档。
+
+协作指南:
+1. 在开始工作前，请仔细阅读 SharedContext 中的"当前活跃文件"和"已发现的信息"。
+2. 如果遇到无法解决的问题，请使用 `[REQUEST_HELP: role] 问题描述` 请求帮助。
+3. 如果发现重要信息，请使用 `[DISCOVERY: type] 内容` 分享。type 可选: bug, pattern, decision, general。
+4. 注意避免修改其他模型正在使用的文件（见 SharedContext）。
 """,
     ),
     ModelRole.SONNET: RoleDefinition(
@@ -112,6 +124,12 @@ ROLE_DEFINITIONS: dict[ModelRole, RoleDefinition] = {
 4. 进行技术深度分析
 
 你需要展示详细的推理过程和解决方案。
+
+协作指南:
+1. 在开始工作前，请仔细阅读 SharedContext 中的"当前活跃文件"和"已发现的信息"。
+2. 如果遇到无法解决的问题，请使用 `[REQUEST_HELP: role] 问题描述` 请求帮助。
+3. 如果发现重要信息，请使用 `[DISCOVERY: type] 内容` 分享。type 可选: bug, pattern, decision, general。
+4. 注意避免修改其他模型正在使用的文件（见 SharedContext）。
 """,
     ),
     ModelRole.OPUS: RoleDefinition(
@@ -137,6 +155,12 @@ ROLE_DEFINITIONS: dict[ModelRole, RoleDefinition] = {
 4. 验证其他模型的输出
 
 你需要确保操作准确执行，输出符合规范。
+
+协作指南:
+1. 在开始工作前，请仔细阅读 SharedContext 中的"当前活跃文件"和"已发现的信息"。
+2. 如果遇到无法解决的问题，请使用 `[REQUEST_HELP: role] 问题描述` 请求帮助。
+3. 如果发现重要信息，请使用 `[DISCOVERY: type] 内容` 分享。type 可选: bug, pattern, decision, general。
+4. 注意避免修改其他模型正在使用的文件（见 SharedContext）。
 """,
     ),
 }

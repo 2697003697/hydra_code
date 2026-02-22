@@ -47,10 +47,12 @@ def print_help():
   [cyan]/pro [dim][-y][/dim][/cyan]   - Pro 模型
   [cyan]/sonnet [dim][-y][/dim][/cyan]- Sonnet 模型
   [cyan]/opus [dim][-y][/dim][/cyan]  - Opus 模型
-  [cyan]/complex [dim][-y][/dim][/cyan]- 多模型协作
+  [cyan]/parallel [dim][-y][/dim][/cyan]- 并行协作
+  [cyan]/leader [role][/cyan]   - Leader 模式 (默认: opus)
   [cyan]/auto[/cyan]        - 自动判断
   [cyan]/stats[/cyan]       - API统计
   [cyan]/lang[/cyan]        - {t("cmd_lang")}
+  [cyan]/model[/cyan]       - {t("cmd_model")}
   [cyan]/yes[/cyan]         - {t("cmd_yes")}
   [cyan]/exit[/cyan]        - {t("cmd_exit")}
 
@@ -59,7 +61,8 @@ def print_help():
   [yellow]Pro[/yellow]     - 平衡性能，适合中等任务
   [yellow]Sonnet[/yellow]  - 高质量，适合复杂任务
   [yellow]Opus[/yellow]    - 最强能力，适合困难任务
-  [yellow]Complex[/yellow] - 多模型并行协作
+  [yellow]Parallel[/yellow]- 多模型并行协作
+  [yellow]Leader[/yellow]  - 主从协作模式
   [yellow]Auto[/yellow]    - 自动选择模式
 """
     console.print(Panel(help_text, title="[bold blue] Help [/bold blue]", border_style="blue"))
@@ -143,6 +146,32 @@ def show_context(working_dir: Path):
     console.print(Panel(context.get_lightweight_context(), title=t("codebase_context"), border_style="green"))
 
 
+def show_models(config: Config):
+    """Show available models and current assignments."""
+    table = Table(title=t("model_title"), show_header=True, header_style="bold cyan")
+    table.add_column("Model Name", style="yellow")
+    table.add_column("Provider", style="green")
+    table.add_column("Details", style="white")
+
+    if not config.models:
+        console.print("[yellow]No models defined in config.models[/yellow]")
+        return
+
+    for name, model in config.models.items():
+        info = f"Model: {model.model_name}"
+        if model.description:
+            info += f"\nDesc: {model.description}"
+        if model.base_url:
+            info += f"\nURL: {model.base_url}"
+        if model.max_tokens:
+            info += f"\nMax Tokens: {model.max_tokens}"
+        
+        table.add_row(name, model.provider, info)
+    
+    console.print(table)
+    console.print(f"\n[dim]{t('model_usage')}[/dim]")
+
+
 async def run_interactive(config: Config):
     i18n = get_i18n()
     if config.language == "en":
@@ -197,6 +226,35 @@ async def run_interactive(config: Config):
                     console.print(f"[green]{t("cleared")}[/green]")
                 elif command == "/context":
                     show_context(working_dir)
+                elif command == "/model":
+                    parts = user_input.split()
+                    if len(parts) == 1:
+                        show_models(config)
+                    elif len(parts) >= 2 and parts[1] == "list":
+                        show_models(config)
+                    elif len(parts) == 4 and parts[1] == "use":
+                        role_name = parts[2].lower()
+                        model_name = parts[3]
+                        
+                        valid_roles = [r.value for r in ModelRole]
+                        if role_name not in valid_roles:
+                            console.print(f"[red]Invalid role: {role_name}. Valid roles: {', '.join(valid_roles)}[/red]")
+                            continue
+                            
+                        if model_name not in config.models:
+                            console.print(f"[red]Model '{model_name}' not found in config.[/red]")
+                            continue
+                            
+                        # Update config
+                        config.role_configs[role_name].use_model = model_name
+                        save_config(config)
+                        
+                        console.print(f"[green]Role '{role_name}' switched to use model '{model_name}'.[/green]")
+                        
+                        # Re-initialize session to clear cached clients
+                        session = ChatSession(config, str(working_dir))
+                    else:
+                         console.print(f"[yellow]{t('model_usage')}[/yellow]")
                 elif command == "/lang":
                     new_lang = i18n.toggle_language()
                     config.language = new_lang.value
@@ -235,14 +293,26 @@ async def run_interactive(config: Config):
                         console.print(f"[yellow]{t("collaboration_not_active")}[/yellow]")
                 elif command == "/memory":
                     session.show_memory_stats()
-                elif command in ["/fast", "/pro", "/sonnet", "/opus", "/complex", "/auto"]:
+                elif command in ["/fast", "/pro", "/sonnet", "/opus", "/parallel", "/leader", "/auto"]:
                     mode = command[1:]
-                    session.set_mode(mode)
+                    
+                    # Parse args
+                    leader_role = None
+                    console.print(f"[dim]Debug: parts={parts}, command={command}[/dim]")
                     if len(parts) > 1:
                         args = parts[1].split()
                         if "-y" in args or "--yes" in args:
                             config.auto_approve = True
                             console.print(f"[dim]{t('auto_approve_enabled')}[/dim]")
+                        
+                        # Extract leader role for /leader command
+                        if command == "/leader":
+                            for arg in args:
+                                if not arg.startswith("-"):
+                                    leader_role = arg
+                                    break
+                    
+                    session.set_mode(mode, leader_role=leader_role)
                 elif command == "/stats":
                     s = stats.get_stats()
                     console.print(Panel(s.get_summary(), title="[yellow]API调用统计[/yellow]", border_style="yellow"))

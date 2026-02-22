@@ -9,7 +9,42 @@ from enum import Enum
 from typing import Any, Optional
 
 from .roles import ModelRole, get_role_definition
+from ..clients import Message, Role
 
+DISPATCHER_PROMPT = """你是一个智能任务分发器。请分析用户的请求，并将其拆解为适合不同模型角色的子任务。
+
+可用角色：
+- FAST (简单任务，快速响应)
+- PRO (代码设计，逻辑规划，复杂任务)
+- SONNET (代码编写，Bug修复，具体实现)
+- OPUS (复杂推理，文件操作，最终整合，兜底)
+
+任务类型 (task_type)：
+- simple: 简单问答，无需复杂上下文
+- complex: 需要多步思考或多个文件操作
+- multi_stage: 需要串行或并行的多阶段协作
+
+请输出 JSON 格式：
+{
+  "task_type": "simple/complex/multi_stage",
+  "analysis": "简短的任务分析",
+  "subtasks": [
+    {
+      "role": "fast/pro/sonnet/opus",
+      "task": "子任务描述",
+      "priority": 1-10 (10最高),
+      "dependencies": ["依赖的任务描述(可选)"]
+    }
+  ],
+  "direct_response": "如果只是简单问答，直接在此返回回复(可选)"
+}
+
+注意：
+1. 如果是简单问答，task_type设为simple，subtasks留空或仅分配给FAST。
+2. 如果涉及代码修改，通常需要 PRO 设计，SONNET 实现。
+3. 如果涉及文件读写，OPUS 比较可靠。
+4. 确保子任务描述清晰具体。
+"""
 
 class TaskType(Enum):
     SIMPLE = "simple"
@@ -98,7 +133,15 @@ class TaskDispatcher:
             for key, patterns in self.PATTERNS.items()
         }
 
-    def analyze(self, user_input: str, context: Optional[dict] = None) -> TaskAnalysis:
+    async def analyze(self, user_input: str, client: Any = None, context: Optional[dict] = None) -> TaskAnalysis:
+        # 如果提供了 LLM 客户端，优先使用 LLM 进行智能分析
+        if client:
+            try:
+                return await self._analyze_with_llm(user_input, client, context)
+            except Exception as e:
+                print(f"智能分发失败，回退到规则匹配: {e}")
+
+        # 回退到基于规则的匹配
         scores = self._classify_intent(user_input)
         task_type = self._determine_task_type(scores, user_input)
         
@@ -115,6 +158,35 @@ class TaskDispatcher:
             task_type=task_type,
             analysis=self._generate_analysis(scores, user_input),
             subtasks=subtasks,
+        )
+
+    async def _analyze_with_llm(self, user_input: str, client: Any, context: Optional[dict] = None) -> TaskAnalysis:
+        messages = [
+            Message(role=Role.SYSTEM, content=DISPATCHER_PROMPT),
+            Message(role=Role.USER, content=f"用户请求: {user_input}")
+        ]
+        
+        # 这里的 client 是 ModelClient.client，通常支持 chat_stream 或 chat
+        # 假设我们使用 chat_stream 并收集结果，或者如果有直接的 chat 方法
+        # 根据 orchestrator.py，client 有 chat_stream
+        
+        full_response = ""
+        # 简单的收集流式响应
+        async for chunk in client.chat_stream(messages=messages, tools=[], max_tokens=1000):
+             if chunk.content:
+                 full_response += chunk.content
+        
+        return self.parse_dispatcher_response(full_response) or self._fallback_analysis(user_input)
+
+    def _fallback_analysis(self, user_input: str) -> TaskAnalysis:
+        # 当 LLM 解析失败时的保底逻辑
+        scores = self._classify_intent(user_input)
+        task_type = self._determine_task_type(scores, user_input)
+        subtasks = self._create_subtasks(scores, user_input)
+        return TaskAnalysis(
+            task_type=task_type,
+            analysis="LLM解析失败，使用规则降级分析",
+            subtasks=subtasks
         )
 
     def _classify_intent(self, text: str) -> dict[str, int]:

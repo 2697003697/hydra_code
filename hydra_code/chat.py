@@ -21,6 +21,7 @@ from .memory import ConversationMemory, MessageType
 from .orchestration import (
     DynamicCoordinator,
     MultiModelOrchestrator,
+    LeaderCollaborator,
     ModelRole,
     get_role_definition,
     WorkflowPhase,
@@ -74,8 +75,10 @@ class ChatSession:
     messages: list[Message] = field(default_factory=list)
     tool_registry: ToolRegistry = field(default_factory=ToolRegistry)
     orchestrator: Optional[MultiModelOrchestrator] = None
+    leader_collaborator: Optional[LeaderCollaborator] = None
     coordinator: Optional[DynamicCoordinator] = None
     use_multi_model: bool = True
+    use_leader_mode: bool = False
     use_dynamic_collaboration: bool = True
     work_history: WorkHistory = field(default_factory=WorkHistory)
     memory: ConversationMemory = field(default_factory=ConversationMemory)
@@ -130,6 +133,23 @@ class ChatSession:
                 self.use_multi_model = True
             except Exception:
                 self.use_multi_model = False
+                
+        # Leader mode setup
+        try:
+            # We need agents for leader mode
+            if not hasattr(self, 'agents') or not self.agents:
+                 # Try to setup basic agents if not already done by coordinator
+                 pass # Agents are usually set up by coordinator
+            
+            if hasattr(self, 'agents') and self.agents:
+                self.leader_collaborator = LeaderCollaborator(
+                    agents=self.agents,
+                    tool_registry=self.tool_registry,
+                    working_dir=self.working_dir,
+                )
+        except Exception as e:
+            console.print(f"[yellow]Leader mode initialization failed: {e}[/yellow]")
+            self.leader_collaborator = None
 
     def _setup_system_prompt(self):
         ctx = get_smart_context(Path(self.working_dir))
@@ -151,6 +171,8 @@ class ChatSession:
         # Check if specific single model mode is set
         if hasattr(self, 'single_model_role') and self.single_model_role:
             await self._process_single_model_with_role(user_input, self.single_model_role)
+        elif self.use_leader_mode and self.leader_collaborator:
+            await self._process_leader(user_input)
         elif self.use_dynamic_collaboration and self.coordinator:
             await self._process_dynamic_collaboration(user_input)
         elif self.use_multi_model and self.orchestrator:
@@ -180,6 +202,25 @@ class ChatSession:
         self.messages.append(Message(
             role=Role.ASSISTANT,
             content=result,
+        ))
+
+    async def _process_leader(self, user_input: str):
+        console.print("\n[bold blue]Assistant (Leader Mode):[/bold blue]")
+        
+        # Get context from codebase
+        ctx = get_smart_context(Path(self.working_dir))
+        context_str = ctx.get_lightweight_context()
+        
+        result_content = await self.leader_collaborator.execute(user_input, context_str)
+        
+        console.print()
+        console.print(Markdown(result_content))
+        
+        self.memory.add_message(MessageType.ASSISTANT, result_content)
+        
+        self.messages.append(Message(
+            role=Role.ASSISTANT,
+            content=result_content,
         ))
 
     async def _process_multi_model(self, user_input: str):
@@ -380,10 +421,10 @@ class ChatSession:
         console.print(f"  创建文件: {stats['files_created']}")
         console.print(f"  修改文件: {stats['files_modified']}")
     
-    def set_mode(self, mode: str):
+    def set_mode(self, mode: str, leader_role: Optional[str] = None):
         """
         Set execution mode.
-        Modes: fast, pro, sonnet, opus, complex, auto
+        Modes: fast, pro, sonnet, opus, parallel, leader, auto
         """
         from .orchestration import ModelRole
         
@@ -397,23 +438,68 @@ class ChatSession:
             self.orchestrator = None
             console.print(f"[green]已切换到 {mode.upper()} 单模型模式[/green]")
             
-        elif mode == "complex":
-            # Multi-model collaboration mode - FORCE complex workflow
+        elif mode == "parallel":
+            # Multi-model collaboration mode - FORCE parallel workflow
             self.config.single_model_mode = False
             self.use_multi_model = True
             self.use_dynamic_collaboration = True
+            self.use_leader_mode = False
             self.single_model_role = None
             self._setup_coordinator()
-            # Force complex mode in coordinator
+            # Force parallel mode in coordinator
             if self.coordinator:
-                self.coordinator.set_force_mode("complex")
-            console.print("[green]已切换到多模型协作模式（强制）[/green]")
+                self.coordinator.set_force_mode("parallel")
+            console.print("[green]已切换到多模型并行协作模式（强制）[/green]")
+
+        elif mode == "leader":
+            # Leader mode
+            self.config.single_model_mode = False
+            self.use_multi_model = False
+            self.use_dynamic_collaboration = False
+            self.use_leader_mode = True
+            self.single_model_role = None
+            
+            target_leader = ModelRole.OPUS
+            if leader_role:
+                try:
+                    target_leader = ModelRole(leader_role.lower())
+                except ValueError:
+                    console.print(f"[yellow]Warning: Invalid leader role '{leader_role}'. Using 'opus'.[/yellow]")
+
+            # Ensure leader collaborator is initialized
+            if not self.leader_collaborator and hasattr(self, 'agents') and self.agents:
+                 self.leader_collaborator = LeaderCollaborator(
+                     agents=self.agents,
+                     tool_registry=self.tool_registry,
+                     working_dir=self.working_dir,
+                     leader_role=target_leader
+                 )
+            elif self.leader_collaborator:
+                # Update existing collaborator
+                self.leader_collaborator.set_leader(target_leader)
+            elif not hasattr(self, 'agents') or not self.agents:
+                 # Try to init coordinator to get agents
+                 self._setup_coordinator()
+                 if self.agents:
+                     self.leader_collaborator = LeaderCollaborator(
+                         agents=self.agents,
+                         tool_registry=self.tool_registry,
+                         working_dir=self.working_dir,
+                         leader_role=target_leader
+                     )
+
+            if not self.leader_collaborator:
+                console.print("[red]无法初始化 Leader 模式，请检查模型配置[/red]")
+                return
+
+            console.print(f"[green]已切换到 Leader-Worker 主从协作模式 (Leader: {target_leader.value})[/green]")
             
         elif mode == "auto":
             # Auto mode - let system decide
             self.config.single_model_mode = False
             self.use_multi_model = True
             self.use_dynamic_collaboration = True
+            self.use_leader_mode = False
             self.single_model_role = None
             self._setup_coordinator()
             if self.coordinator:

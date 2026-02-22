@@ -22,7 +22,8 @@ from .communication import Discovery
 from .state import CollaborationState, SharedContext
 from .parallel import ParallelCollaborator
 from .sequential import SequentialCollaborator
-from ..clients import Message, Role, create_client
+from .leader import LeaderCollaborator
+from ..clients import Message, Role, ToolDefinition, create_client
 from ..config import Config
 from ..tools import ToolRegistry, get_default_tools
 from .. import stats
@@ -77,6 +78,15 @@ class ExecutionPlan:
             return 0.0
         completed = sum(1 for s in self.steps if s.status == "completed")
         return completed / len(self.steps) * 100
+    
+    def mark_current_step_completed(self, result: str = "", issues: list[str] = None):
+        step = self.get_current_step()
+        if step:
+            step.status = "completed"
+            step.result = result
+            if issues:
+                step.issues = issues
+            self.advance()
 
 
 @dataclass
@@ -94,7 +104,8 @@ ROUTING_PROMPT = """你是 Fast 模型，负责判断用户请求的复杂度和
 
 - complexity:
   - simple: 简单任务（问答、单个文件、小游戏等）
-  - complex: 复杂任务（项目、多文件、长篇文章等）
+  - moderate: 中等任务（多步修改、小型功能开发）
+  - complex: 复杂任务（大型项目、架构设计、全栈开发）
 
 - domain:
   - coding: 编程任务（代码、软件、工具、Debug）
@@ -107,7 +118,7 @@ ROUTING_PROMPT = """你是 Fast 模型，负责判断用户请求的复杂度和
   - qa: 纯问答/解释
 
 回复JSON：
-{{"complexity": "simple/complex", "domain": "coding/content/general", "intent": "new/modify/qa", "reason": "理由"}}
+{{"complexity": "simple/moderate/complex", "domain": "coding/content/general", "intent": "new/modify/qa", "reason": "理由"}}
 """
 
 
@@ -349,20 +360,27 @@ class DynamicCoordinator:
                 )
 
     async def _analyze_request(self, text: str) -> RoutingResult:
-        fast_agent = self.agents.get(ModelRole.FAST)
-        if not fast_agent:
-            fast_agent = next(iter(self.agents.values())) if self.agents else None
+        """Analyze user request complexity and intent using Fast or Pro."""
+        routing_agent = self._get_agent_with_fallback([ModelRole.FAST, ModelRole.PRO])
         
-        if not fast_agent:
-            return RoutingResult(TaskComplexity.SIMPLE, "coding", "new", "No fast_agent")
+        if not routing_agent:
+            return RoutingResult(TaskComplexity.SIMPLE, "coding", "new", "No routing agent")
         
         prompt = ROUTING_PROMPT.format(user_input=text)
         messages = [Message(role=Role.USER, content=prompt)]
         
         try:
-            response = await self._call_agent(fast_agent, messages, max_tokens=150)
+            response = await self._call_agent(routing_agent, messages, max_tokens=150)
             
             json_match = re.search(r'\{[\s\S]+\}', response)
+            
+            # If Fast fails to output JSON, try Pro if available
+            if not json_match and routing_agent.role == ModelRole.FAST and ModelRole.PRO in self.agents:
+                console.print("[dim]Fast模型分析失败，尝试使用Pro模型...[/dim]")
+                pro_agent = self.agents[ModelRole.PRO]
+                response = await self._call_agent(pro_agent, messages, max_tokens=150)
+                json_match = re.search(r'\{[\s\S]+\}', response)
+
             if json_match:
                 result = json.loads(json_match.group())
                 complexity_str = result.get("complexity", "simple")
@@ -400,6 +418,9 @@ class DynamicCoordinator:
         user_request: str,
         on_update: Optional[Callable[[str], None]] = None,
     ) -> str:
+        """
+        Main entry point for collaboration.
+        """
         stats.reset_stats()
         self.start_time = time.time()
         self.state = CollaborationState(user_request, self.working_dir)
@@ -409,42 +430,87 @@ class DynamicCoordinator:
         ui.print_thinking("扫描工作区...")
         await self._scan_workspace()
         ui.clear_thinking()
-        
-        # New Routing Logic
-        ui.print_thinking("分析任务领域与复杂度...")
+
+        # 1. Force Mode Handling
+        if self.force_mode:
+            # Explicit Leader Mode
+            if self.force_mode.startswith("leader"):
+                # Parse optional role: "leader:sonnet" or just "leader"
+                parts = self.force_mode.split(":")
+                leader_role_name = parts[1] if len(parts) > 1 else "opus"
+                
+                # Try to map string to ModelRole, default to Opus
+                try:
+                    # Try direct match first
+                    target_role = ModelRole(leader_role_name)
+                except ValueError:
+                    # Try to find by value or name
+                    target_role = ModelRole.OPUS
+                    for r in ModelRole:
+                        if r.value == leader_role_name:
+                            target_role = r
+                            break
+
+                ui.print_phase("启动协作", f"强制 Leader 模式 (Leader: {target_role.value})")
+                
+                collaborator = LeaderCollaborator(
+                    agents=self.agents,
+                    tool_registry=self.tool_registry,
+                    working_dir=self.working_dir,
+                    leader_role=target_role
+                )
+                return await collaborator.execute(
+                    user_request, 
+                    self._workspace_context, 
+                    domain="coding", 
+                    intent="unknown", 
+                    complexity="complex"
+                )
+
+            # Explicit Parallel Mode (Legacy)
+            elif self.force_mode == "parallel":
+                ui.print_phase("启动协作", "强制并行模式 (无 Leader)")
+                collaborator = ParallelCollaborator(
+                    agents={r: a.client for r, a in self.agents.items()},
+                    tool_registry=self.tool_registry,
+                    working_dir=self.working_dir,
+                    domain="coding"
+                )
+                return await collaborator.execute(user_request, self._workspace_context)
+
+        # 2. Auto Routing (Standard Path)
+        ui.print_phase("分析请求", "正在分析任务复杂度...")
         routing = await self._analyze_request(user_request)
-        ui.clear_thinking()
         
-        if self.force_mode == "simple":
-            return await self._quick_response(user_request)
-        elif self.force_mode == "complex":
-            # Force complex but use detected domain if available, default to coding
-            domain = routing.domain if routing else "coding"
-            return await self._full_workflow(user_request, domain)
-            
+        # Simple Path -> Single Model
         if routing.complexity == TaskComplexity.SIMPLE:
-            self.phase = WorkflowPhase.QUICK_ROUTING
-            result = await self._quick_response(user_request)
-            self._show_stats()
-            return result
+            ui.print_phase("快速响应", f"检测到简单任务 ({routing.domain})")
+            return await self._quick_response(user_request)
         
-        # Complex Path
-        if routing.intent == "modify":
-            # Use Sequential Maintenance Workflow
-            ui.print_phase("启动维护", f"检测到维护/更新任务 ({routing.domain})，启动顺序维护模式")
-            
-            collaborator = SequentialCollaborator(
-                agents={r: a.client for r, a in self.agents.items()},
-                tool_registry=self.tool_registry,
-                working_dir=self.working_dir,
-                domain=routing.domain
-            )
-            return await collaborator.execute(user_request, self._workspace_context)
-        else:
-            # Use Parallel Creation Workflow
-            result = await self._full_workflow(user_request, routing.domain)
-            self._show_stats()
-            return result
+        # Moderate/Complex Path -> Leader Mode
+        complexity_desc = "中等" if routing.complexity == TaskComplexity.MODERATE else "复杂"
+        ui.print_phase("启动协作", f"检测到{complexity_desc}任务 ({routing.domain})，启动 Leader 协作模式")
+        
+        # Default to Opus as leader for auto mode, fallback to others
+        leader_agent = self._get_agent_with_fallback([ModelRole.OPUS, ModelRole.SONNET, ModelRole.PRO])
+        leader_role = leader_agent.role if leader_agent else ModelRole.OPUS
+        
+        collaborator = LeaderCollaborator(
+            agents=self.agents,
+            tool_registry=self.tool_registry,
+            working_dir=self.working_dir,
+            leader_role=leader_role
+        )
+        
+        result = await collaborator.execute(
+            user_request, 
+            self._workspace_context, 
+            domain=routing.domain,
+            intent=routing.intent,
+            complexity=routing.complexity.value
+        )
+        self._show_stats()
+        return result
     
     def _show_stats(self):
         s = stats.get_stats()
@@ -454,14 +520,24 @@ class DynamicCoordinator:
                 "按角色": ", ".join(f"{k}: {v}次" for k, v in s.calls_by_role.items()),
             })
     
-    async def _quick_response(self, question: str) -> str:
-        opus_agent = self.agents.get(ModelRole.OPUS)
-        if not opus_agent:
-            opus_agent = self.agents.get(ModelRole.FAST)
-        if not opus_agent:
-            opus_agent = next(iter(self.agents.values())) if self.agents else None
+    def _get_agent_with_fallback(self, preferred_roles: list[ModelRole]) -> Any:
+        """Get the first available agent from a list of preferred roles."""
+        for role in preferred_roles:
+            if role in self.agents:
+                return self.agents[role]
         
-        if not opus_agent:
+        # Fallback to any available agent
+        if self.agents:
+            fallback = next(iter(self.agents.values()))
+            # console.print(f"[dim]Fallback to {fallback.role.value}[/dim]")
+            return fallback
+        return None
+
+    async def _quick_response(self, question: str) -> str:
+        # Simple task priority: Fast (Speed) -> Sonnet (Balance) -> Opus (Power)
+        agent = self._get_agent_with_fallback([ModelRole.FAST, ModelRole.SONNET, ModelRole.OPUS])
+        
+        if not agent:
             return "没有可用的模型来回答问题"
         
         context = self._get_project_context()
@@ -491,7 +567,7 @@ class DynamicCoordinator:
         
         max_iterations = 10
         for i in range(max_iterations):
-            response = await self._call_agent_with_tools(opus_agent, messages, tools)
+            response = await self._call_agent_with_tools(agent, messages, tools)
             messages.append(response)
             
             if not response.tool_calls:
@@ -532,391 +608,6 @@ class DynamicCoordinator:
         
         return "已达到最大迭代次数"
     
-    async def _full_workflow(self, user_request: str, domain: str = "coding") -> str:
-        """Execute the full complex workflow."""
-        self.phase = WorkflowPhase.PLANNING
-        
-        ui.print_phase("启动协作", f"检测到复杂任务 ({domain})，启动多模型协作模式")
-        
-        collaborator = ParallelCollaborator(
-            agents={r: a.client for r, a in self.agents.items()},
-            tool_registry=self.tool_registry,
-            working_dir=self.working_dir,
-            domain=domain
-        )
-        
-        return await collaborator.execute(user_request, self._workspace_context)
-    
-    async def _create_plan(self, user_request: str) -> list[dict]:
-        pro_agent = self.agents.get(ModelRole.PRO)
-        if not pro_agent:
-            pro_agent = self.agents.get(ModelRole.OPUS)
-        
-        if not pro_agent:
-            return []
-        
-        context = self._get_project_context()
-        
-        prompt = PLANNING_PROMPT.format(
-            user_request=user_request,
-            context=context,
-        )
-        
-        messages = [Message(role=Role.USER, content=prompt)]
-        response = await self._call_agent(pro_agent, messages)
-        
-        try:
-            json_match = re.search(r'\[[\s\S]*?\]', response)
-            if json_match:
-                plan = json.loads(json_match.group())
-                if isinstance(plan, list):
-                    return [{"step": s.get("step", i+1), "description": s.get("description", "")} 
-                            for i, s in enumerate(plan)]
-        except json.JSONDecodeError:
-            pass
-        
-        return []
-    
-    async def _execute_task_with_collaboration(self, task: TaskStep, user_request: str) -> dict:
-        max_attempts = 3
-        attempt = 0
-        issues = []
-        
-        while attempt < max_attempts:
-            attempt += 1
-            
-            console.print(f"[dim]  Sonnet + Pro 协作执行 (尝试 {attempt}/{max_attempts})[/dim]")
-            
-            result = await self._pro_sonnet_collaborate(task, user_request, issues)
-            
-            if result.get("success"):
-                if self.work_history:
-                    self.work_history.add_task(task.description, result.get("validation", "完成"), True)
-                return {
-                    "success": True,
-                    "result": result.get("validation", "完成"),
-                    "issues": []
-                }
-            
-            issues = result.get("issues", [])
-            
-            if issues and attempt < max_attempts:
-                console.print(f"[yellow]  发现问题，尝试自行解决...[/yellow]")
-                continue
-            
-            console.print(f"[magenta]  Sonnet 和 Pro 无法解决，请求 Opus 帮助...[/magenta]")
-            
-            opus_result = await self._opus_help(task, user_request, result, issues)
-            
-            if opus_result.get("success"):
-                if self.work_history:
-                    solution_data = opus_result.get("solution", {})
-                    if isinstance(solution_data, dict):
-                        solution_text = solution_data.get("description", "Opus 已解决")
-                    else:
-                        solution_text = str(solution_data) if solution_data else "Opus 已解决"
-                    self.work_history.add_task(task.description, solution_text, True)
-                return {
-                    "success": True,
-                    "result": opus_result.get("message", "Opus 已解决"),
-                    "issues": []
-                }
-            
-            issues_raw = opus_result.get("issues", [])
-            if isinstance(issues_raw, list):
-                issues = []
-                for issue in issues_raw:
-                    if isinstance(issue, dict):
-                        issues.append(f"{issue.get('file', '')}: {issue.get('problem', str(issue))}")
-                    else:
-                        issues.append(str(issue))
-            else:
-                issues = issues_raw if issues_raw else issues
-        
-        if self.work_history:
-            self.work_history.add_task(task.description, "失败", False)
-        return {
-            "success": False,
-            "result": "多次尝试后仍失败",
-            "issues": issues
-        }
-    
-    async def _pro_sonnet_collaborate(self, task: TaskStep, user_request: str, previous_issues: list[str]) -> dict:
-        sonnet_agent = self.agents.get(ModelRole.SONNET)
-        pro_agent = self.agents.get(ModelRole.PRO)
-        
-        if not sonnet_agent or not pro_agent:
-            return {"success": False, "issues": ["缺少 Sonnet 或 Pro"]}
-        
-        context = self._get_project_context()
-        completed_work = self._get_completed_work_summary()
-        issues_str = "\n".join(previous_issues) if previous_issues else "无"
-        
-        prompt = COLLABORATION_PROMPT.format(
-            task_description=task.description,
-            context=context,
-            completed_work=completed_work,
-            issues=issues_str,
-        )
-        
-        messages = [Message(role=Role.USER, content=prompt)]
-        response = await self._call_agent(pro_agent, messages, max_tokens=4000)
-        
-        try:
-            json_match = re.search(r'\{[\s\S]*\}', response)
-            if json_match:
-                result = json.loads(json_match.group())
-                
-                analysis = result.get("analysis", "")
-                files_to_modify = result.get("files_to_modify", [])
-                validation = result.get("validation", "")
-                
-                if analysis:
-                    console.print(f"[dim]  分析: {analysis[:150]}...[/dim]")
-                
-                if files_to_modify:
-                    console.print(f"[dim]  目标文件: {', '.join(files_to_modify[:5])}[/dim]")
-                
-                changes = result.get("changes", [])
-                for change in changes:
-                    await self._apply_change(change)
-                
-                if validation:
-                    console.print(f"[dim]  验证: {validation[:100]}...[/dim]")
-                
-                return result
-        except json.JSONDecodeError:
-            pass
-        
-        return {"success": False, "issues": ["无法解析协作结果"]}
-    
-    async def _opus_help(self, task: TaskStep, user_request: str, work_done: dict, issues: list[str]) -> dict:
-        opus_agent = self.agents.get(ModelRole.OPUS)
-        if not opus_agent:
-            return {"success": False, "issues": ["Opus 不可用"]}
-        
-        context = self._get_project_context()
-        work_str = json.dumps(work_done, ensure_ascii=False, indent=2)
-        issues_str = "\n".join(issues) if issues else "无"
-        
-        prompt = OPUS_HELP_PROMPT.format(
-            task_description=task.description,
-            work_done=work_str,
-            issues=issues_str,
-            context=context,
-        )
-        
-        messages = [Message(role=Role.USER, content=prompt)]
-        response = await self._call_agent(opus_agent, messages, max_tokens=4000)
-        
-        try:
-            json_match = re.search(r'\{[\s\S]*\}', response)
-            if json_match:
-                result = json.loads(json_match.group())
-                
-                diagnosis = result.get("problem_diagnosis", {})
-                solution = result.get("solution", {})
-                message = result.get("message", "")
-                
-                if diagnosis:
-                    console.print(f"\n[yellow]╭─ 问题诊断 ─{'─' * 40}[/yellow]")
-                    root_cause = diagnosis.get("root_cause", "")
-                    affected_files = diagnosis.get("affected_files", [])
-                    error_type = diagnosis.get("error_type", "")
-                    
-                    if root_cause:
-                        console.print(f"[yellow]│[/yellow] [red]根本原因:[/red] {root_cause}")
-                    if error_type:
-                        console.print(f"[yellow]│[/yellow] [red]错误类型:[/red] {error_type}")
-                    if affected_files:
-                        console.print(f"[yellow]│[/yellow] [red]受影响文件:[/red] {', '.join(affected_files)}")
-                    console.print(f"[yellow]╰──────────────────────────────────────────────[/yellow]")
-                
-                if solution:
-                    console.print(f"\n[green]╭─ 解决方案 ─{'─' * 40}[/green]")
-                    description = solution.get("description", "")
-                    steps = solution.get("steps", [])
-                    
-                    if description:
-                        console.print(f"[green]│[/green] 方案: {description}")
-                    if steps:
-                        console.print("[green]│[/green] 执行步骤:")
-                        for i, step in enumerate(steps, 1):
-                            console.print(f"[green]│[/green]   {i}. {step}")
-                    console.print(f"[green]╰──────────────────────────────────────────────[/green]")
-                
-                if message:
-                    console.print(f"\n[cyan]说明: {message}[/cyan]")
-                
-                changes = result.get("changes", [])
-                for change in changes:
-                    await self._apply_change(change)
-                
-                return result
-        except json.JSONDecodeError:
-            pass
-        
-        return {"success": False, "issues": ["Opus 无法解析"]}
-    
-    async def _apply_change(self, change: dict):
-        action = change.get("action", "")
-        file_path = change.get("file", "")
-        content = change.get("content", "")
-        
-        if not file_path or not content:
-            return
-        
-        if action == "create":
-            tool = self.tool_registry.get("write_file")
-            if tool:
-                result = await tool.execute({"file_path": file_path, "content": content}, self.working_dir)
-                if result.success:
-                    ui.print_tool_result("write_file", True, f"创建: {file_path}")
-                    if self.work_history:
-                        self.work_history.add_file_created(file_path)
-                else:
-                    ui.print_tool_result("write_file", False, f"创建失败: {file_path}")
-        
-        elif action == "edit":
-            tool = self.tool_registry.get("edit_file")
-            if tool:
-                read_tool = self.tool_registry.get("read_file")
-                existing = ""
-                if read_tool:
-                    read_result = await read_tool.execute({"file_path": file_path}, self.working_dir)
-                    if read_result.success:
-                        existing = read_result.output
-                
-                result = await tool.execute({
-                    "file_path": file_path,
-                    "old_str": existing[:1000] if existing else "",
-                    "new_str": content
-                }, self.working_dir)
-                
-                if result.success:
-                    ui.print_tool_result("edit_file", True, f"编辑: {file_path}")
-                    if self.work_history:
-                        self.work_history.add_file_modified(file_path)
-                else:
-                    write_tool = self.tool_registry.get("write_file")
-                    if write_tool:
-                        await write_tool.execute({"file_path": file_path, "content": content}, self.working_dir)
-                        ui.print_tool_result("write_file", True, f"覆盖: {file_path}")
-                        if self.work_history:
-                            self.work_history.add_file_modified(file_path)
-    
-    async def _final_validation(self, user_request: str) -> dict:
-        opus_agent = self.agents.get(ModelRole.OPUS)
-        if not opus_agent:
-            return {"completed": True, "issues": [], "need_restart": False}
-        
-        context = self._get_project_context()
-        plan_str = "\n".join([f"{s.id}. {s.description} - {s.status}" for s in self.plan.steps])
-        completed_str = "\n".join([f"任务 {k}: {v[:300]}" for k, v in self.step_results.items()])
-        
-        prompt = FINAL_VALIDATION_PROMPT.format(
-            user_request=user_request,
-            plan=plan_str,
-            completed_work=completed_str,
-            context=context,
-        )
-        
-        messages = [Message(role=Role.USER, content=prompt)]
-        response = await self._call_agent(opus_agent, messages)
-        
-        try:
-            json_match = re.search(r'\{[\s\S]*\}', response)
-            if json_match:
-                result = json.loads(json_match.group())
-                
-                validation = result.get("validation_result", {})
-                issues = result.get("issues", [])
-                message = result.get("message", "")
-                
-                console.print(f"\n[cyan]╭─ 验证结果 ─{'─' * 40}[/cyan]")
-                
-                if validation:
-                    all_completed = validation.get("all_tasks_completed", False)
-                    code_ok = validation.get("code_quality_ok", False)
-                    can_run = validation.get("can_run", False)
-                    
-                    console.print(f"[cyan]│[/cyan] 功能完成: {'[green]✓[/green]' if all_completed else '[red]✗[/red]'}")
-                    console.print(f"[cyan]│[/cyan] 代码质量: {'[green]✓[/green]' if code_ok else '[red]✗[/red]'}")
-                    console.print(f"[cyan]│[/cyan] 可运行性: {'[green]✓[/green]' if can_run else '[red]✗[/red]'}")
-                
-                if issues:
-                    console.print(f"[cyan]╰──────────────────────────────────────────────[/cyan]")
-                    console.print(f"\n[red]╭─ 发现问题 ─{'─' * 40}[/red]")
-                    for issue in issues:
-                        file_path = issue.get("file", "")
-                        problem = issue.get("problem", "")
-                        solution = issue.get("solution", "")
-                        severity = issue.get("severity", "warning")
-                        
-                        severity_color = {
-                            "critical": "red",
-                            "warning": "yellow",
-                            "info": "blue",
-                        }.get(severity, "yellow")
-                        
-                        console.print(f"[red]│[/red] [{severity_color}]● {severity.upper()}[/{severity_color}]")
-                        if file_path:
-                            console.print(f"[red]│[/red]   文件: {file_path}")
-                        if problem:
-                            console.print(f"[red]│[/red]   问题: {problem}")
-                        if solution:
-                            console.print(f"[red]│[/red]   修复: {solution}")
-                    
-                    console.print(f"[red]╰──────────────────────────────────────────────[/red]")
-                
-                if message:
-                    console.print(f"\n[cyan]说明: {message}[/cyan]")
-                
-                return result
-        except json.JSONDecodeError:
-            pass
-        
-        return {"completed": True, "issues": [], "need_restart": False}
-    
-    async def _generate_summary(self, user_request: str) -> str:
-        pro_agent = self.agents.get(ModelRole.PRO)
-        if not pro_agent:
-            pro_agent = self.agents.get(ModelRole.OPUS)
-        
-        if not pro_agent:
-            return self._generate_basic_summary()
-        
-        plan_str = "\n".join([f"{s.id}. {s.description}" for s in self.plan.steps])
-        completed_str = "\n".join([f"任务 {k}: {v[:500]}" for k, v in self.step_results.items()])
-        
-        prompt = SUMMARY_PROMPT.format(
-            user_request=user_request,
-            plan=plan_str,
-            completed_work=completed_str,
-        )
-        
-        messages = [Message(role=Role.USER, content=prompt)]
-        return await self._call_agent(pro_agent, messages)
-    
-    def _generate_basic_summary(self) -> str:
-        lines = ["# 任务完成报告", ""]
-        lines.append(f"## 任务计划 ({len(self.plan.steps)} 步)")
-        
-        for step in self.plan.steps:
-            status = "✓" if step.status == "completed" else "✗"
-            lines.append(f"- {status} 任务 {step.id}: {step.description}")
-        
-        return "\n".join(lines)
-    
-    def _get_completed_work_summary(self) -> str:
-        if not self.step_results:
-            return "无"
-        
-        lines = []
-        for step_id, result in self.step_results.items():
-            lines.append(f"任务 {step_id}: {result[:200]}")
-        return "\n".join(lines)
-    
     async def _scan_workspace(self) -> str:
         from ..codebase import get_smart_context
         from pathlib import Path
@@ -955,28 +646,23 @@ class DynamicCoordinator:
         
         return "\n".join(context_parts)
     
-    async def _call_agent_with_tools(self, agent: ModelAgent, messages: list[Message], tools: list, max_tokens: int = None) -> Message:
-        tokens = max_tokens or self.config.max_tokens
-        stats.record_call(role=agent.role.value)
+    async def _call_agent_with_tools(self, agent: Any, messages: list[Message], tools: list[ToolDefinition] = None) -> Message:
+        client = agent.client if hasattr(agent, 'client') else agent
+        role_name = agent.role.value if hasattr(agent, 'role') else "Assistant"
         
         try:
             with ui.create_live_session() as session:
-                def on_tool_update(name, args):
-                    session.update_tool(name, args)
-                    
-                response = await agent.client.chat_stream(
+                response = await client.chat_stream(
                     messages=messages,
                     tools=tools,
-                    max_tokens=tokens,
-                    temperature=self.config.temperature,
+                    temperature=0.7,
                     on_content=lambda c: session.update_content(c),
                     on_thinking=lambda t: session.update_thinking(t),
-                    on_tool_update=on_tool_update,
+                    on_tool_call=lambda t, a: session.update_tool(t, a)
                 )
             return response
-            
         except Exception as e:
-            console.print(f"[red]Agent {agent.role.value} error: {e}[/red]")
+            console.print(f"[red]Agent {role_name} error: {e}[/red]")
             return Message(role=Role.ASSISTANT, content=f"Error: {e}")
     
     async def _call_agent(self, agent: ModelAgent, messages: list[Message], max_tokens: int = None) -> str:
@@ -994,7 +680,7 @@ class DynamicCoordinator:
                     on_thinking=lambda t: session.update_thinking(t),
                 )
             
-            return response.content
+            return response.content or ""
             
         except Exception as e:
             console.print(f"[red]Agent {agent.role.value} error: {e}[/red]")

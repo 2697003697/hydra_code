@@ -40,7 +40,7 @@ class I18N:
                 Language.EN: "Help",
             },
             "help_commands": {
-                Language.ZH: "可用命令",
+                Language.ZH: "命令列表",
                 Language.EN: "Available Commands",
             },
             "help_collaboration": {
@@ -60,7 +60,7 @@ class I18N:
                 Language.EN: "Show help message",
             },
             "cmd_roles": {
-                Language.ZH: "显示角色配置",
+                Language.ZH: "显示当前模型角色配置",
                 Language.EN: "Show role configurations",
             },
             "cmd_config": {
@@ -68,24 +68,28 @@ class I18N:
                 Language.EN: "Show current configuration",
             },
             "cmd_clear": {
-                Language.ZH: "清空对话历史",
+                Language.ZH: "清除对话历史",
                 Language.EN: "Clear conversation history",
             },
             "cmd_context": {
-                Language.ZH: "显示代码库上下文",
+                Language.ZH: "显示当前代码上下文",
                 Language.EN: "Show codebase context",
             },
             "cmd_status": {
-                Language.ZH: "显示协作状态",
+                Language.ZH: "显示当前状态",
                 Language.EN: "Show collaboration status",
             },
             "cmd_lang": {
                 Language.ZH: "切换语言",
                 Language.EN: "Switch language",
             },
+            "cmd_model": {
+                Language.ZH: "管理模型配置",
+                Language.EN: "Manage models",
+            },
             "cmd_yes": {
-                Language.ZH: "切换自动确认模式",
-                Language.EN: "Toggle auto-approve mode",
+                Language.ZH: "开启/关闭自动确认",
+                Language.EN: "Enable/disable auto-approve",
             },
             "auto_approve_enabled": {
                 Language.ZH: "自动确认模式已启用",
@@ -96,8 +100,8 @@ class I18N:
                 Language.EN: "Auto-approve mode disabled",
             },
             "cmd_exit": {
-                Language.ZH: "退出 CLI",
-                Language.EN: "Exit the CLI",
+                Language.ZH: "退出程序",
+                Language.EN: "Exit the application",
             },
             "config_file": {
                 Language.ZH: "配置文件",
@@ -128,20 +132,36 @@ class I18N:
                 Language.EN: "Role Configuration",
             },
             "role_fast": {
-                Language.ZH: "Fast",
+                Language.ZH: "Fast (快速)",
                 Language.EN: "Fast",
             },
             "role_pro": {
-                Language.ZH: "Pro",
+                Language.ZH: "Pro (专业)",
                 Language.EN: "Pro",
             },
             "role_sonnet": {
-                Language.ZH: "Sonnet",
+                Language.ZH: "Sonnet (代码)",
                 Language.EN: "Sonnet",
             },
             "role_opus": {
-                Language.ZH: "Opus",
+                Language.ZH: "Opus (思考)",
                 Language.EN: "Opus",
+            },
+            "model_title": {
+                Language.ZH: "可用模型列表",
+                Language.EN: "Available Models",
+            },
+            "model_not_found": {
+                Language.ZH: "未在配置中找到模型 '{name}'。",
+                Language.EN: "Model '{name}' not found in configuration.",
+            },
+            "model_switched": {
+                Language.ZH: "角色 '{role}' 已切换至模型 '{model}'。",
+                Language.EN: "Role '{role}' switched to model '{model}'.",
+            },
+            "model_usage": {
+                Language.ZH: "用法: /model list 或 /model use <role> <model_name>",
+                Language.EN: "Usage: /model list OR /model use <role> <model_name>",
             },
             "role_fast_desc": {
                 Language.ZH: "任务分析与分发，快速响应",

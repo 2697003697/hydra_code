@@ -97,7 +97,14 @@ class MultiModelOrchestrator:
     ) -> AggregatedResult:
         self.messages.append(Message(role=Role.USER, content=user_input))
         
-        analysis = self.dispatcher.analyze(user_input)
+        # 优先使用 Fast 模型进行分析
+        client = None
+        if ModelRole.FAST in self.clients:
+            client = self.clients[ModelRole.FAST].client
+        elif self.clients:
+            client = next(iter(self.clients.values())).client
+
+        analysis = await self.dispatcher.analyze(user_input, client=client)
         
         if analysis.task_type == TaskType.SIMPLE:
             return await self._handle_simple_task(user_input, on_content)

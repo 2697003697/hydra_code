@@ -108,14 +108,30 @@ class ParallelMonitor:
 class StreamRenderer:
     """Renders streaming output with thinking and content blocks."""
     def __init__(self):
-        self.thinking_buffer: list[str] = []
+        self.thinking_lines: list[str] = [""]
+        self.thinking_total_chars: int = 0
         self.content_buffer: list[str] = []
         self.tool_status: Optional[str] = None
         self.tool_args_buffer: list[str] = []
         
     def update_thinking(self, chunk: str):
-        self.thinking_buffer.append(chunk)
+        if not chunk:
+            return
+        self.thinking_total_chars += len(chunk)
         
+        # Append chunk to the last line
+        self.thinking_lines[-1] += chunk
+        
+        # If the last line contains newlines, split it
+        if '\n' in self.thinking_lines[-1]:
+            parts = self.thinking_lines[-1].split('\n')
+            self.thinking_lines.pop() # Remove the incomplete last line
+            self.thinking_lines.extend(parts)
+            
+        # Keep only the last 50 lines to prevent memory/performance issues
+        if len(self.thinking_lines) > 50:
+            self.thinking_lines = self.thinking_lines[-50:]
+
     def update_content(self, chunk: str):
         self.content_buffer.append(chunk)
 
@@ -127,18 +143,40 @@ class StreamRenderer:
         renderables = []
         
         # Render Thinking Block
-        if self.thinking_buffer:
-            thinking_text = "".join(self.thinking_buffer).strip()
-            if thinking_text:
+        if self.thinking_total_chars > 0:
+            # If we have content, collapse the thinking block
+            if self.content_buffer:
+                thinking_text = f"Thinking process completed ({self.thinking_total_chars} chars)."
                 thinking_panel = Panel(
-                    thinking_text,
+                    Text(thinking_text, style="dim"),
                     title="[yellow]🤔 Thinking[/yellow]",
-                    border_style="yellow",
+                    border_style="yellow dim",
                     box=ROUNDED,
                     title_align="left",
                     padding=(0, 1)
                 )
                 renderables.append(thinking_panel)
+            else:
+                # While thinking, show the last few lines (scrolling window)
+                # Filter out empty strings except maybe the last one if typing
+                visible_lines = [line for line in self.thinking_lines if line]
+                
+                # Take last 20 non-empty lines
+                if len(visible_lines) > 20:
+                    display_text = "...\n" + "\n".join(visible_lines[-20:])
+                else:
+                    display_text = "\n".join(visible_lines)
+                    
+                if display_text:
+                    thinking_panel = Panel(
+                        display_text,
+                        title="[yellow]🤔 Thinking[/yellow]",
+                        border_style="yellow",
+                        box=ROUNDED,
+                        title_align="left",
+                        padding=(0, 1)
+                    )
+                    renderables.append(thinking_panel)
             
         # Render Content
         if self.content_buffer:

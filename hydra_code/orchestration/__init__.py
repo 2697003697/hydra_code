@@ -20,6 +20,7 @@ from .communication import (
 from .state import CollaborationState, SharedContext, TaskProgress
 from .coordinator import DynamicCoordinator, WorkflowPhase, TaskComplexity, ExecutionPlan, TaskStep
 from .parallel import ParallelCollaborator, ParallelTask, ModuleSpec, ArchitecturePlan
+from .leader import LeaderCollaborator
 
 __all__ = [
     "ModelRole",
@@ -53,4 +54,5 @@ __all__ = [
     "ParallelTask",
     "ModuleSpec",
     "ArchitecturePlan",
+    "LeaderCollaborator",
 ]
