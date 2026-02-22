@@ -10,6 +10,7 @@ from typing import Optional
 
 
 class ModelRole(Enum):
+    CHAT = "chat"
     FAST = "fast"
     PRO = "pro"
     SONNET = "sonnet"
@@ -27,6 +28,30 @@ class RoleDefinition:
 
 
 ROLE_DEFINITIONS: dict[ModelRole, RoleDefinition] = {
+    ModelRole.CHAT: RoleDefinition(
+        role=ModelRole.CHAT,
+        name="Chat",
+        description="对话管理与意图识别",
+        responsibilities=[
+            "与用户进行自然语言交互",
+            "理解用户意图并路由到合适的工作模式",
+            "管理对话上下文",
+            "作为系统默认入口",
+        ],
+        triggers=[
+            "所有用户输入的初始处理",
+            "非特定任务的闲聊",
+        ],
+        system_prompt_suffix="""
+你是 Chat 模型，负责与用户进行交互并管理对话流程。
+你的主要职责是：
+1. 理解用户的意图。
+2. 如果是简单的对话或问候，直接回复。
+3. 如果是具体的任务请求，根据配置将其路由到合适的工作模型 (Fast, Pro, Sonnet, Opus)。
+
+请保持友好、专业的态度。
+""",
+    ),
     ModelRole.FAST: RoleDefinition(
         role=ModelRole.FAST,
         name="Fast",

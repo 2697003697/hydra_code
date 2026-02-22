@@ -39,6 +39,7 @@ class Config:
     role_configs: dict[str, RoleConfig] = field(default_factory=dict)
     models: dict[str, ModelProfile] = field(default_factory=dict)
     default_role: str = "fast"
+    default_work_mode: str = "fast"
     language: str = "zh"
     max_tokens: int = 4096
     temperature: float = 0.0
@@ -48,11 +49,41 @@ class Config:
     single_model_mode: bool = True
 
     def __post_init__(self):
+        # Ensure all default roles exist
+        default_configs = self._get_default_role_configs()
         if not self.role_configs:
-            self.role_configs = self._get_default_role_configs()
+            self.role_configs = default_configs
+        else:
+            for role, config in default_configs.items():
+                if role not in self.role_configs:
+                    self.role_configs[role] = config
+
+        # If chat is not explicitly configured (or has no model/key), try to fall back to fast
+        chat_config = self.role_configs.get("chat")
+        if chat_config:
+            has_config = chat_config.use_model or (chat_config.api_key and chat_config.model_name)
+            if not has_config and "fast" in self.role_configs:
+                fast_config = self.role_configs["fast"]
+                if fast_config.use_model:
+                    self.role_configs["chat"] = RoleConfig(role="chat", use_model=fast_config.use_model)
+                else:
+                    self.role_configs["chat"] = RoleConfig(
+                        role="chat",
+                        provider=fast_config.provider,
+                        api_key=fast_config.api_key,
+                        base_url=fast_config.base_url,
+                        model_name=fast_config.model_name,
+                        max_tokens=fast_config.max_tokens
+                    )
+
+        if not self.default_work_mode:
+            self.default_work_mode = self.default_role
+        if not self.default_role:
+            self.default_role = self.default_work_mode
 
     def _get_default_role_configs(self) -> dict[str, RoleConfig]:
         return {
+            "chat": RoleConfig(role="chat"),
             "fast": RoleConfig(role="fast"),
             "pro": RoleConfig(role="pro"),
             "sonnet": RoleConfig(role="sonnet"),
@@ -161,10 +192,11 @@ def parse_config(data: dict) -> Config:
                     max_tokens=role_data.get("max_tokens"),
                 )
 
-    default_role = data.get("default_role", "fast")
+    default_work_mode = data.get("default_work_mode") or data.get("default_role") or "fast"
 
     return Config(
-        default_role=default_role,
+        default_role=default_work_mode,
+        default_work_mode=default_work_mode,
         role_configs=role_configs,
         models=models,
         language=data.get("language", "zh"),
@@ -181,7 +213,8 @@ def save_config(config: Config) -> None:
     config_path = get_config_path()
 
     data = {
-        "default_role": config.default_role,
+        "default_role": config.default_work_mode,
+        "default_work_mode": config.default_work_mode,
         "language": config.language,
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
@@ -241,7 +274,7 @@ def create_sample_config() -> None:
     sample_config = """# Hydra Code Configuration
 # Copy this file to ~/.hydra-code and fill in your API keys
 
-default_role: fast
+default_work_mode: fast
 language: zh
 
 max_tokens: 4096
@@ -255,6 +288,7 @@ single_model_mode: false
 # Role configurations
 # Can be direct configuration or reference to a model in 'models'
 roles:
+  chat: "deepseek-v3" # Default interaction role
   fast: "deepseek-v3" # References model defined below
   pro: "gpt-4" 
   sonnet: "claude-3-5-sonnet"

@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -230,8 +230,13 @@ HTML_TEMPLATE = """
         <button onclick="setMode('fast')">快速</button>
         <button onclick="setMode('pro')">专业</button>
         <button onclick="setMode('leader')">Leader</button>
+        <button onclick="chooseFile()">上传</button>
+        <button onclick="downloadFile()">下载</button>
+        <button onclick="explainLast()">解释</button>
         <button onclick="clearHistory()">清除</button>
     </div>
+    
+    <input type="file" id="file-input" style="display:none" />
     
     <div class="chat-container" id="chat-container">
         <div class="message system">已连接到 Hydra Code 服务器</div>
@@ -255,6 +260,7 @@ HTML_TEMPLATE = """
         const messageInput = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         const statusText = document.getElementById('status-text');
+        const fileInput = document.getElementById('file-input');
         
         let isProcessing = false;
         
@@ -280,6 +286,14 @@ HTML_TEMPLATE = """
                     isProcessing = false;
                     sendBtn.disabled = false;
                 }
+            } else if (data.type === 'file') {
+                hideTyping();
+                addMessage('system', data.content || '开始下载文件');
+                if (data.metadata && data.metadata.url) {
+                    triggerDownload(data.metadata.url);
+                }
+                isProcessing = false;
+                sendBtn.disabled = false;
             } else {
                 hideTyping();
                 addMessage(data.type, data.content);
@@ -294,6 +308,15 @@ HTML_TEMPLATE = """
             div.textContent = content;
             chatContainer.appendChild(div);
             chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        function triggerDownload(url) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = '';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
         }
         
         function showTyping() {
@@ -334,6 +357,57 @@ HTML_TEMPLATE = """
             }));
         }
         
+        function chooseFile() {
+            fileInput.click();
+        }
+        
+        async function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const targetPath = prompt('保存到服务器路径（可选，基于工作目录）', '');
+            const formData = new FormData();
+            formData.append('file', file);
+            if (targetPath) {
+                formData.append('target_path', targetPath);
+            }
+            
+            addMessage('system', `开始上传: ${file.name}`);
+            
+            try {
+                const response = await fetch('/api/files/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                let data = null;
+                try {
+                    data = await response.json();
+                } catch (e) {
+                    data = null;
+                }
+                
+                if (response.ok && data && data.success) {
+                    addMessage('system', `上传完成: ${data.path} (${data.size} bytes)`);
+                } else {
+                    const detail = data && (data.detail || data.error) ? (data.detail || data.error) : '上传失败';
+                    addMessage('system', detail);
+                }
+            } catch (e) {
+                addMessage('system', '上传失败');
+            } finally {
+                fileInput.value = '';
+            }
+        }
+        
+        function downloadFile() {
+            const path = prompt('输入要下载的服务器路径（相对工作目录）', '');
+            if (!path) return;
+            const url = `/api/files/download?path=${encodeURIComponent(path)}`;
+            window.open(url, '_blank');
+            addMessage('system', `开始下载: ${path}`);
+        }
+        
         function clearHistory() {
             ws.send(JSON.stringify({
                 type: 'command',
@@ -342,12 +416,28 @@ HTML_TEMPLATE = """
             chatContainer.innerHTML = '<div class="message system">历史已清除</div>';
         }
         
+        function explainLast() {
+            const messages = chatContainer.querySelectorAll('.message.user');
+            if (messages.length === 0) {
+                addMessage('system', '没有历史消息可解释');
+                return;
+            }
+            const lastUserMsg = messages[messages.length - 1].textContent;
+            ws.send(JSON.stringify({
+                type: 'command',
+                command: 'explain',
+                args: { message: lastUserMsg }
+            }));
+        }
+        
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
             }
         });
+        
+        fileInput.addEventListener('change', handleFileSelect);
         
         messageInput.addEventListener('input', () => {
             messageInput.rows = Math.min(5, Math.max(1, messageInput.value.split('\\n').length));
@@ -363,6 +453,13 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
     app = FastAPI(title="Hydra Code Remote")
     
     bridge = ChatBridge(config, working_dir)
+    base_dir = Path(working_dir).resolve()
+    
+    def resolve_safe_path(relative_path: str) -> Path:
+        target = (base_dir / relative_path).resolve()
+        if base_dir not in target.parents and target != base_dir:
+            raise HTTPException(status_code=403, detail="Invalid path")
+        return target
     
     @app.on_event("startup")
     async def startup():
@@ -377,8 +474,48 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
         return {
             "status": "ok",
             "connections": bridge.manager.get_connection_count(),
-            "mode": config.default_role
+            "mode": config.default_work_mode
         }
+    
+    @app.post("/api/files/upload")
+    async def upload_file(file: UploadFile = File(...), target_path: Optional[str] = None):
+        if not file or not file.filename:
+            raise HTTPException(status_code=400, detail="Missing file")
+        
+        if target_path:
+            target = resolve_safe_path(target_path)
+            if target.exists() and target.is_dir():
+                destination = target / file.filename
+            elif str(target_path).endswith(("/", "\\")):
+                destination = target / file.filename
+            else:
+                destination = target
+        else:
+            destination = base_dir / file.filename
+        
+        if base_dir not in destination.parents and destination != base_dir:
+            raise HTTPException(status_code=403, detail="Invalid path")
+        
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        content = await file.read()
+        destination.write_bytes(content)
+        
+        return {
+            "success": True,
+            "path": str(destination.relative_to(base_dir)),
+            "size": len(content),
+        }
+    
+    @app.get("/api/files/download")
+    async def download_file(path: str):
+        if not path:
+            raise HTTPException(status_code=400, detail="Missing path")
+        
+        target = resolve_safe_path(path)
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        return FileResponse(path=str(target), filename=target.name)
     
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

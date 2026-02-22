@@ -552,6 +552,7 @@ class DynamicCoordinator:
 - search_files: 搜索文件
 - run_command: 执行命令
 - search_code: 搜索代码
+- download_file: 下载工作目录内文件
 
 当前工作目录: {self.working_dir}
 

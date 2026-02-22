@@ -15,6 +15,7 @@
 
 | 角色 | 名称 | 职责 |
 |------|------|------------------|
+| chat | Chat | 默认交互角色，负责理解意图并分发任务 |
 | fast | Fast | 快速响应，任务分类与分发 |
 | pro | Pro | 项目规划与核心代码编写 |
 | sonnet | Sonnet | 深度推理与问题解决 |
@@ -44,7 +45,7 @@ pip install -e .
 你可以配置**模型库 (models)**，然后在**角色 (roles)** 中引用它们：
 
 ```yaml
-default_role: fast
+default_work_mode: fast
 max_tokens: 4096
 temperature: 0.7
 auto_approve: false
@@ -68,6 +69,7 @@ models:
 
 # 2. 分配角色（引用上面的模型名称，或直接配置）
 roles:
+  chat: deepseek-official # 默认交互角色
   fast: deepseek-official  # 引用模型库
   pro: gpt-4-azure         # 引用模型库
   sonnet: deepseek-official
@@ -168,12 +170,52 @@ Leader 会根据用户意图调整行为：
 - `[HANDOFF: role]` - 将工作移交给其他角色
 - `[COMPLETE]` - 标记任务完成
 
+## 远程访问
+
+支持通过浏览器或其他设备远程访问：
+
+```bash
+# 启动 Web 服务器
+hydra --server --port 8080
+```
+
+### 访问方式
+
+| 方式 | 地址 | 说明 |
+|------|------|------|
+| 本地 | http://localhost:8080 | 本机访问 |
+| 局域网 | http://<IP>:8080 | 同一 WiFi 下的手机/电脑 |
+| Tailscale | http://<Tailscale IP>:8080 | 远程 P2P 访问 |
+| ngrok | http://<ngrok URL> | 公网穿透（需认证） |
+
+### 特性
+
+- **响应式界面**：适配手机、平板、桌面
+- **实时通信**：WebSocket 流式响应
+- **模式切换**：随时切换 Fast/Auto/Pro/Leader 模式
+- **意图解释**：点击"解释"查看路由决策
+
+## 长期记忆
+
+Hydra Code 会随着使用逐渐了解你的偏好：
+
+- **常用模式**：记住你最常用的执行模式
+- **沟通习惯**：学习你的常用短语和意图
+- **对话历史**：自动摘要关键上下文
+
+记忆数据存储在 `工作目录/.hydra/memory/` 目录，重启后不丢失。
+
 ## 配置示例
 
 ### 使用不同的 API 提供商
 
 ```yaml
 roles:
+  chat:
+    api_key: "deepseek-key"
+    base_url: "https://api.deepseek.com/v1"
+    model_name: "deepseek-chat"
+
   fast:
     api_key: "stepfun-key"
     base_url: "https://api.stepfun.com/v1"

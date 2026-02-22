@@ -118,7 +118,7 @@ def show_config(config: Config):
     config_text = f"""
 [bold]{t("config_title")}:[/bold]
   {t("config_file")}: [cyan]{get_config_path()}[/cyan]
-  {t("default_role")}: [cyan]{config.default_role}[/cyan]
+  {t("default_role")}: [cyan]{config.default_work_mode}[/cyan]
   {t("current_language")}: [cyan]{config.language}[/cyan]
   Max tokens: [cyan]{config.max_tokens}[/cyan]
   Temperature: [cyan]{config.temperature}[/cyan]
@@ -444,6 +444,11 @@ def main():
     if args.server:
         from .server import start_server
         working_dir = Path(config.working_directory) if config.working_directory else Path.cwd()
+        
+        if not config.auto_approve:
+            config.auto_approve = True
+            console.print(f"[dim]Web模式已自动启用自动授权[/dim]")
+        
         asyncio.run(start_server(
             config,
             str(working_dir),

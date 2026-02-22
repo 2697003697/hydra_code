@@ -42,6 +42,7 @@ SYSTEM_PROMPT = """你是hydra，是一个动态多模型协作的聊天会话�
 - search_files: 搜索文件 (参数: pattern)
 - run_command: 执行命令 (参数: command)
 - search_code: 搜索代码 (参数: query)
+- download_file: 下载工作目录内文件 (参数: path)
 
 重要提示：
 1. 打开文件/链接：
@@ -309,7 +310,7 @@ class ChatSession:
     
     async def _process_single_model(self, user_input: str):
         # In single model mode, use the default role's config
-        default_role = self.config.default_role
+        default_role = self.config.default_work_mode
         await self._process_single_model_with_role(user_input, default_role)
 
     def _get_compact_messages(self) -> list[Message]:

@@ -7,6 +7,7 @@ from .base import Tool, ToolRegistry, ToolResult
 from .file_tools import (
     ReadFileTool, WriteFileTool, EditFileTool, ListDirectoryTool, SearchFilesTool,
     DeleteFileTool, CreateDirectoryTool, MoveFileTool, CopyFileTool, GetFileInfoTool,
+    DownloadFileTool,
 )
 from .command_tools import RunCommandTool
 from .codebase_tools import SearchCodebaseTool
@@ -26,6 +27,7 @@ __all__ = [
     "MoveFileTool",
     "CopyFileTool",
     "GetFileInfoTool",
+    "DownloadFileTool",
     "RunCommandTool",
     "SearchCodebaseTool",
     "FetchUrlTool",
@@ -45,6 +47,7 @@ def get_default_tools() -> list[Tool]:
         MoveFileTool(),
         CopyFileTool(),
         GetFileInfoTool(),
+        DownloadFileTool(),
         RunCommandTool(),
         SearchCodebaseTool(),
         FetchUrlTool(),

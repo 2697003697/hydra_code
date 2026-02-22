@@ -3,8 +3,10 @@ File operation tools.
 """
 
 import os
+import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ..clients.base import ToolDefinition
 from .base import Tool, ToolResult
@@ -91,6 +93,58 @@ class ReadFileTool(Tool):
             )
         except Exception as e:
             return ToolResult(success=False, output="", error=str(e))
+
+
+class DownloadFileTool(Tool):
+    name = "download_file"
+    description = "Generate a download link for a file under the working directory."
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path of the file to download, relative to working directory.",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute or relative file path. If absolute, it must be under working directory.",
+                    },
+                },
+                "required": ["path"],
+            },
+        )
+
+    async def execute(self, arguments: dict[str, Any], working_dir: str) -> ToolResult:
+        path_input = arguments.get("path") or arguments.get("file_path") or ""
+        path_input = path_input.strip()
+        if not path_input:
+            return ToolResult(success=False, output="", error="Missing path")
+
+        base_dir = Path(working_dir).resolve()
+        target = Path(path_input)
+        if not target.is_absolute():
+            target = (base_dir / path_input).resolve()
+        else:
+            target = target.resolve()
+
+        if base_dir not in target.parents and target != base_dir:
+            return ToolResult(success=False, output="", error="Invalid path")
+
+        if not target.exists():
+            return ToolResult(success=False, output="", error="File not found")
+
+        if not target.is_file():
+            return ToolResult(success=False, output="", error="Not a file")
+
+        rel_path = target.relative_to(base_dir).as_posix()
+        url = f"/api/files/download?path={quote(rel_path)}"
+        payload = json.dumps({"path": rel_path, "url": url}, ensure_ascii=False)
+        return ToolResult(success=True, output=f"DOWNLOAD::{payload}")
 
 
 class WriteFileTool(Tool):

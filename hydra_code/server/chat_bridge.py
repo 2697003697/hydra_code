@@ -1,38 +1,43 @@
 """
-Bridge between WebSocket clients and ChatSession.
+Bridge between WebSocket clients and DialogueManager.
 """
 
 import asyncio
+import json
 import uuid
 from typing import Optional
+from urllib.parse import quote
 from datetime import datetime
 
 from rich.console import Console
 
-from ..chat import ChatSession
 from ..config import Config
+from ..dialogue import DialogueManager
 from .connection_manager import ConnectionManager, Message
 
 console = Console()
 
 
 class ChatBridge:
-    """Bridges WebSocket connections to ChatSession."""
+    """Bridges WebSocket connections to DialogueManager."""
 
     def __init__(self, config: Config, working_dir: str):
         self.config = config
         self.working_dir = working_dir
         self.manager = ConnectionManager()
-        self.session: Optional[ChatSession] = None
+        self.dialogue_manager: Optional[DialogueManager] = None
         self._processing = False
 
     async def initialize(self):
-        """Initialize chat session."""
-        self.session = ChatSession(self.config, self.working_dir)
-        console.print("[green]Chat session initialized for remote access[/green]")
+        """Initialize dialogue manager."""
+        self.dialogue_manager = DialogueManager(self.config, self.working_dir)
+        console.print("[green]Dialogue manager initialized for remote access[/green]")
 
     async def handle_message(self, client_id: str, content: str):
         """Handle incoming message from WebSocket client."""
+        if await self._handle_download_command(client_id, content):
+            return
+
         if self._processing:
             await self.manager.broadcast(Message(
                 id=str(uuid.uuid4()),
@@ -45,7 +50,6 @@ class ChatBridge:
         self._processing = True
 
         try:
-            # Broadcast user message
             user_msg = Message(
                 id=str(uuid.uuid4()),
                 type="user",
@@ -55,8 +59,7 @@ class ChatBridge:
             )
             await self.manager.broadcast(user_msg)
 
-            # Process through ChatSession
-            await self._process_through_session(content)
+            await self._process_through_dialogue(content)
 
         except Exception as e:
             await self.manager.broadcast(Message(
@@ -68,36 +71,49 @@ class ChatBridge:
         finally:
             self._processing = False
 
-    async def _process_through_session(self, content: str):
-        """Process message through existing ChatSession."""
-        if not self.session:
+    async def _process_through_dialogue(self, content: str):
+        """Process message through DialogueManager."""
+        if not self.dialogue_manager:
             await self.manager.broadcast(Message(
                 id=str(uuid.uuid4()),
                 type="system",
-                content="Session not initialized",
+                content="Dialogue manager not initialized",
                 timestamp=datetime.now().isoformat()
             ))
             return
 
-        # Create a custom output handler that broadcasts to WebSocket
-        output_buffer = []
-        
-        # For now, we'll use a simple approach
-        # In a full implementation, we'd need to modify ChatSession to support streaming callbacks
-        
         try:
-            # This is a simplified version - full implementation would need
-            # to hook into the ChatSession's streaming output
-            await self.session.process_message(content)
-            
-            # Get the last assistant message
-            if self.session.messages:
-                last_msg = self.session.messages[-1]
-                if last_msg.role.value == "assistant":
+            async for chunk in self.dialogue_manager.handle_message(content):
+                if chunk:
+                    if chunk.startswith("DOWNLOAD::"):
+                        payload = chunk[len("DOWNLOAD::"):]
+                        try:
+                            data = json.loads(payload)
+                            url = data.get("url")
+                            path = data.get("path")
+                        except Exception:
+                            url = None
+                            path = None
+                        if url:
+                            await self.manager.broadcast(Message(
+                                id=str(uuid.uuid4()),
+                                type="file",
+                                content=f"下载文件: {path or ''}",
+                                timestamp=datetime.now().isoformat(),
+                                metadata={"url": url, "path": path}
+                            ))
+                        else:
+                            await self.manager.broadcast(Message(
+                                id=str(uuid.uuid4()),
+                                type="system",
+                                content="下载参数解析失败",
+                                timestamp=datetime.now().isoformat()
+                            ))
+                        continue
                     await self.manager.broadcast(Message(
                         id=str(uuid.uuid4()),
                         type="assistant",
-                        content=last_msg.content or "",
+                        content=chunk,
                         timestamp=datetime.now().isoformat()
                     ))
         except Exception as e:
@@ -112,8 +128,8 @@ class ChatBridge:
     async def handle_command(self, client_id: str, command: str, args: dict):
         """Handle special commands from client."""
         if command == "clear":
-            if self.session:
-                self.session.clear_history()
+            if self.dialogue_manager:
+                self.dialogue_manager.clear_history()
             await self.manager.broadcast(Message(
                 id=str(uuid.uuid4()),
                 type="system",
@@ -121,20 +137,34 @@ class ChatBridge:
                 timestamp=datetime.now().isoformat()
             ))
         elif command == "status":
-            await self.manager.broadcast_status(
-                "ready",
-                {
-                    "connections": self.manager.get_connection_count(),
-                    "mode": self.session.config.default_role if self.session else "unknown"
-                }
-            )
-        elif command == "mode":
-            mode = args.get("mode", "auto")
-            if self.session:
-                self.session.set_mode(mode)
+            mode = self.dialogue_manager.get_current_mode() if self.dialogue_manager else "unknown"
+            work_mode = self.dialogue_manager.get_work_mode() if self.dialogue_manager else "unknown"
+            intent_info = ""
+            if self.dialogue_manager and self.dialogue_manager.intent:
+                intent_info = f", Intent: {self.dialogue_manager.intent.type.value}"
             await self.manager.broadcast(Message(
                 id=str(uuid.uuid4()),
                 type="system",
-                content=f"Mode set to: {mode}",
+                content=f"Mode: {mode} (work: {work_mode}){intent_info}, Connections: {self.manager.get_connection_count()}",
                 timestamp=datetime.now().isoformat()
             ))
+        elif command == "mode":
+            mode = args.get("mode", "auto")
+            if self.dialogue_manager:
+                self.dialogue_manager.set_mode(mode)
+            await self.manager.broadcast(Message(
+                id=str(uuid.uuid4()),
+                type="system",
+                content=f"Work mode set to: {mode}",
+                timestamp=datetime.now().isoformat()
+            ))
+        elif command == "explain":
+            message = args.get("message", "")
+            if self.dialogue_manager and message:
+                explanation = self.dialogue_manager.explain_routing(message)
+                await self.manager.broadcast(Message(
+                    id=str(uuid.uuid4()),
+                    type="system",
+                    content=explanation,
+                    timestamp=datetime.now().isoformat()
+                ))
