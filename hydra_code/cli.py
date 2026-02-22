@@ -366,6 +366,29 @@ def main():
         help="List available roles",
     )
     parser.add_argument(
+        "--server",
+        "-s",
+        action="store_true",
+        help="Start web server for remote access",
+    )
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        default=8080,
+        help="Server port (default: 8080)",
+    )
+    parser.add_argument(
+        "--ngrok",
+        action="store_true",
+        help="Expose server to internet via ngrok",
+    )
+    parser.add_argument(
+        "--ngrok-auth",
+        type=str,
+        help="Ngrok auth token (optional, for custom domain)",
+    )
+    parser.add_argument(
         "prompt",
         nargs="?",
         help="Single prompt to execute (non-interactive mode)",
@@ -418,7 +441,17 @@ def main():
         console.print(f"[dim]{t("run_init")}[/dim]")
         return
 
-    if args.prompt:
+    if args.server:
+        from .server import start_server
+        working_dir = Path(config.working_directory) if config.working_directory else Path.cwd()
+        asyncio.run(start_server(
+            config,
+            str(working_dir),
+            port=args.port,
+            use_ngrok=args.ngrok,
+            ngrok_auth=args.ngrok_auth
+        ))
+    elif args.prompt:
         working_dir = Path(config.working_directory) if config.working_directory else Path.cwd()
         session = ChatSession(config, str(working_dir))
         asyncio.run(session.process_message(args.prompt))
