@@ -35,7 +35,7 @@ HTML_TEMPLATE = r"""
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             background: #f5f5f5;
@@ -43,7 +43,7 @@ HTML_TEMPLATE = r"""
             display: flex;
             flex-direction: column;
         }
-        
+
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -53,19 +53,19 @@ HTML_TEMPLATE = r"""
             align-items: center;
             flex-shrink: 0;
         }
-        
+
         .header h1 {
             font-size: 18px;
             font-weight: 600;
         }
-        
+
         .status {
             display: flex;
             align-items: center;
             gap: 6px;
             font-size: 13px;
         }
-        
+
         .status-dot {
             width: 8px;
             height: 8px;
@@ -73,12 +73,12 @@ HTML_TEMPLATE = r"""
             background: #10b981;
             animation: pulse 2s infinite;
         }
-        
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
-        
+
         .chat-container {
             flex: 1;
             overflow-y: auto;
@@ -87,7 +87,7 @@ HTML_TEMPLATE = r"""
             flex-direction: column;
             gap: 12px;
         }
-        
+
         .message {
             max-width: 85%;
             padding: 12px 16px;
@@ -96,14 +96,14 @@ HTML_TEMPLATE = r"""
             line-height: 1.5;
             word-wrap: break-word;
         }
-        
+
         .message.user {
             align-self: flex-end;
             background: #667eea;
             color: white;
             border-bottom-right-radius: 4px;
         }
-        
+
         .message.assistant {
             align-self: flex-start;
             background: white;
@@ -111,7 +111,7 @@ HTML_TEMPLATE = r"""
             border-bottom-left-radius: 4px;
             box-shadow: 0 1px 2px rgba(0,0,0,0.1);
         }
-        
+
         .message.system {
             align-self: center;
             background: #e5e7eb;
@@ -120,7 +120,7 @@ HTML_TEMPLATE = r"""
             padding: 6px 12px;
             max-width: 90%;
         }
-        
+
         .message pre {
             background: #1f2937;
             color: #e5e7eb;
@@ -130,7 +130,7 @@ HTML_TEMPLATE = r"""
             font-size: 13px;
             margin: 8px 0;
         }
-        
+
         .message code {
             background: #f3f4f6;
             padding: 2px 6px;
@@ -138,12 +138,12 @@ HTML_TEMPLATE = r"""
             font-size: 13px;
             font-family: 'Courier New', monospace;
         }
-        
+
         .message.assistant code {
             background: #f3f4f6;
             color: #1f2937;
         }
-        
+
         .input-container {
             padding: 12px 16px;
             background: white;
@@ -152,7 +152,7 @@ HTML_TEMPLATE = r"""
             gap: 8px;
             flex-shrink: 0;
         }
-        
+
         .input-wrapper {
             flex: 1;
             display: flex;
@@ -161,7 +161,7 @@ HTML_TEMPLATE = r"""
             border-radius: 20px;
             padding: 0 16px;
         }
-        
+
         .input-wrapper textarea {
             flex: 1;
             border: none;
@@ -173,7 +173,7 @@ HTML_TEMPLATE = r"""
             font-family: inherit;
             max-height: 120px;
         }
-        
+
         .send-btn {
             width: 40px;
             height: 40px;
@@ -187,12 +187,12 @@ HTML_TEMPLATE = r"""
             cursor: pointer;
             flex-shrink: 0;
         }
-        
+
         .send-btn:disabled {
             background: #c7c7c7;
             cursor: not-allowed;
         }
-        
+
         .toolbar {
             display: flex;
             gap: 8px;
@@ -203,7 +203,7 @@ HTML_TEMPLATE = r"""
             flex-shrink: 0;
             -webkit-overflow-scrolling: touch;
         }
-        
+
         .toolbar button {
             padding: 6px 12px;
             border: 1px solid #e5e7eb;
@@ -214,7 +214,7 @@ HTML_TEMPLATE = r"""
             cursor: pointer;
             white-space: nowrap;
         }
-        
+
         .toolbar button:active {
             background: #f3f4f6;
         }
@@ -228,7 +228,7 @@ HTML_TEMPLATE = r"""
             <span id="status-text">在线</span>
         </div>
     </div>
-    
+
     <div class="toolbar">
         <button onclick="setMode('auto')">自动</button>
         <button onclick="setMode('fast')">快速</button>
@@ -239,13 +239,13 @@ HTML_TEMPLATE = r"""
         <button onclick="explainLast()">解释</button>
         <button onclick="clearHistory()">清除</button>
     </div>
-    
+
     <input type="file" id="file-input" style="display:none" />
-    
+
     <div class="chat-container" id="chat-container">
         <div class="message system">已连接到 Hydra Code 服务器</div>
     </div>
-    
+
     <div class="input-container">
         <div class="input-wrapper">
             <textarea id="message-input" placeholder="输入消息..." rows="1"></textarea>
@@ -257,7 +257,7 @@ HTML_TEMPLATE = r"""
             </svg>
         </button>
     </div>
-    
+
     <script>
         let ws = null;
         const chatContainer = document.getElementById('chat-container');
@@ -266,26 +266,26 @@ HTML_TEMPLATE = r"""
         const statusText = document.getElementById('status-text');
         const statusIndicator = document.getElementById('status-indicator');
         const fileInput = document.getElementById('file-input');
-        
+
         let isProcessing = false;
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 5;
         let reconnectInterval = null;
         let isConnecting = false;
-        
+
         function connectWebSocket() {
             // 防止重复连接
             if (isConnecting) {
                 return;
             }
-            
+
             // 如果已经有连接，不要重复创建
             if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
                 return;
             }
-            
+
             isConnecting = true;
-            
+
             try {
                 ws = new WebSocket(`ws://${window.location.host}/ws`);
             } catch (e) {
@@ -293,7 +293,7 @@ HTML_TEMPLATE = r"""
                 isConnecting = false;
                 return;
             }
-            
+
             ws.onopen = () => {
                 statusText.textContent = '在线';
                 statusIndicator.classList.remove('error');
@@ -305,18 +305,18 @@ HTML_TEMPLATE = r"""
                     reconnectInterval = null;
                 }
             };
-            
+
             ws.onclose = () => {
                 statusText.textContent = '离线';
                 statusIndicator.classList.remove('loading');
                 statusIndicator.classList.add('error');
                 isConnecting = false;
-                
+
                 // 避免重复创建重连定时器
                 if (reconnectInterval) {
                     return;
                 }
-                
+
                 if (reconnectAttempts < maxReconnectAttempts) {
                     reconnectInterval = setInterval(() => {
                         reconnectAttempts++;
@@ -333,15 +333,15 @@ HTML_TEMPLATE = r"""
                     addMessage('system', '连接已断开，请刷新页面重试');
                 }
             };
-            
+
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
                 isConnecting = false;
             };
-            
+
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
-                
+
                 if (data.type === 'status') {
                     if (data.content === 'loading') {
                         showTyping();
@@ -387,7 +387,7 @@ HTML_TEMPLATE = r"""
                 }
             };
         }
-        
+
         function addMessage(type, content) {
             const div = document.createElement('div');
             div.className = `message ${type}`;
@@ -395,15 +395,15 @@ HTML_TEMPLATE = r"""
             chatContainer.appendChild(div);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
-        
+
         function formatContent(text) {
             if (!text) return '';
-            
+
             let html = text
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
-            
+
             html = html
                 .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
                 .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -417,10 +417,10 @@ HTML_TEMPLATE = r"""
                 .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
                 .replace(/\n\n/g, '</p><p>')
                 .replace(/\n/g, '<br>');
-            
+
             return `<p>${html}</p>`;
         }
-        
+
         function triggerDownload(url) {
             const link = document.createElement('a');
             link.href = url;
@@ -429,7 +429,7 @@ HTML_TEMPLATE = r"""
             link.click();
             link.remove();
         }
-        
+
         function showTyping() {
             hideTyping();
             const div = document.createElement('div');
@@ -439,33 +439,33 @@ HTML_TEMPLATE = r"""
             chatContainer.appendChild(div);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
-        
+
         function hideTyping() {
             const typing = document.getElementById('typing-indicator');
             if (typing) typing.remove();
         }
-        
+
         function sendMessage() {
             const content = messageInput.value.trim();
             if (!content || isProcessing) return;
-            
+
             // 检查 WebSocket 连接状态
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 addMessage('system', '连接未建立，请稍后再试');
                 return;
             }
-            
+
             ws.send(JSON.stringify({
                 type: 'message',
                 content: content
             }));
-            
+
             messageInput.value = '';
             messageInput.rows = 1;
             isProcessing = true;
             sendBtn.disabled = true;
         }
-        
+
         function setMode(mode) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 addMessage('system', '连接未建立');
@@ -477,37 +477,37 @@ HTML_TEMPLATE = r"""
                 args: { mode: mode }
             }));
         }
-        
+
         function chooseFile() {
             fileInput.click();
         }
-        
+
         async function handleFileSelect(event) {
             const file = event.target.files[0];
             if (!file) return;
-            
+
             const targetPath = prompt('保存到服务器路径（可选，基于工作目录）', '');
             const formData = new FormData();
             formData.append('file', file);
             if (targetPath) {
                 formData.append('target_path', targetPath);
             }
-            
+
             addMessage('system', `开始上传: ${file.name}`);
-            
+
             try {
                 const response = await fetch('/api/files/upload', {
                     method: 'POST',
                     body: formData
                 });
-                
+
                 let data = null;
                 try {
                     data = await response.json();
                 } catch (e) {
                     data = null;
                 }
-                
+
                 if (response.ok && data && data.success) {
                     addMessage('system', `上传完成: ${data.path} (${data.size} bytes)`);
                 } else {
@@ -520,7 +520,7 @@ HTML_TEMPLATE = r"""
                 fileInput.value = '';
             }
         }
-        
+
         function downloadFile() {
             const path = prompt('输入要下载的服务器路径（相对工作目录）', '');
             if (!path) return;
@@ -528,7 +528,7 @@ HTML_TEMPLATE = r"""
             window.open(url, '_blank');
             addMessage('system', `开始下载: ${path}`);
         }
-        
+
         function clearHistory() {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 addMessage('system', '连接未建立');
@@ -540,7 +540,7 @@ HTML_TEMPLATE = r"""
             }));
             chatContainer.innerHTML = '<div class="message system">历史已清除</div>';
         }
-        
+
         function explainLast() {
             const messages = chatContainer.querySelectorAll('.message.user');
             if (messages.length === 0) {
@@ -558,20 +558,20 @@ HTML_TEMPLATE = r"""
                 args: { message: lastUserMsg }
             }));
         }
-        
+
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
             }
         });
-        
+
         fileInput.addEventListener('change', handleFileSelect);
-        
+
         messageInput.addEventListener('input', () => {
             messageInput.rows = Math.min(5, Math.max(1, messageInput.value.split('\\n').length));
         });
-        
+
         // Initialize connection
         connectWebSocket();
     </script>
@@ -583,24 +583,24 @@ HTML_TEMPLATE = r"""
 def create_app(config: Config, working_dir: str) -> FastAPI:
     """Create FastAPI application."""
     app = FastAPI(title="Hydra Code Remote")
-    
+
     bridge = ChatBridge(config, working_dir)
     base_dir = Path(working_dir).resolve()
-    
+
     def resolve_safe_path(relative_path: str) -> Path:
         target = (base_dir / relative_path).resolve()
         if base_dir not in target.parents and target != base_dir:
             raise HTTPException(status_code=403, detail="Invalid path")
         return target
-    
+
     @app.on_event("startup")
     async def startup():
         await bridge.initialize()
-    
+
     @app.get("/", response_class=HTMLResponse)
     async def root():
         return HTML_TEMPLATE
-    
+
     @app.get("/health")
     async def health():
         return {
@@ -608,12 +608,12 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
             "connections": bridge.manager.get_connection_count(),
             "mode": config.default_work_mode
         }
-    
+
     @app.post("/api/files/upload")
     async def upload_file(file: UploadFile = File(...), target_path: Optional[str] = None):
         if not file or not file.filename:
             raise HTTPException(status_code=400, detail="Missing file")
-        
+
         if target_path:
             target = resolve_safe_path(target_path)
             if target.exists() and target.is_dir():
@@ -624,17 +624,17 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
                 destination = target
         else:
             destination = base_dir / file.filename
-        
+
         if base_dir not in destination.parents and destination != base_dir:
             raise HTTPException(status_code=403, detail="Invalid path")
-        
+
         destination.parent.mkdir(parents=True, exist_ok=True)
         content = await file.read()
-        
+
         # Write file asynchronously to avoid blocking
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, destination.write_bytes, content)
-        
+
         # Return simple response, let frontend handle adding message to chat
         return {
             "success": True,
@@ -642,36 +642,37 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
             "size": len(content),
             "filename": file.filename,
         }
-    
+
     @app.get("/api/files/download")
     async def download_file(path: str):
         if not path:
             raise HTTPException(status_code=400, detail="Missing path")
-        
+
         target = resolve_safe_path(path)
         if not target.exists() or not target.is_file():
             raise HTTPException(status_code=404, detail="File not found")
-        
+
         return FileResponse(path=str(target), filename=target.name)
-    
+
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         client_id = str(id(websocket))
         await bridge.manager.connect(websocket)
-        
+
         try:
             while True:
                 data = await websocket.receive_json()
-                
+
                 if data.get("type") == "message":
-                    await bridge.handle_message(websocket, data.get("content", ""))
+                    await bridge.handle_message(client_id, data.get("content", ""))
                 elif data.get("type") == "command":
                     command = data.get("command")
                     args = data.get("args", {})
-                    
+
                     if command == "mode":
                         mode = args.get("mode", "auto")
-                        await bridge.set_mode(mode)
+                        if bridge.dialogue_manager:
+                            bridge.dialogue_manager.set_mode(mode)
                         await bridge.manager.send_personal_message(
                             websocket,
                             Message(
@@ -682,14 +683,81 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
                             )
                         )
                     elif command == "clear":
-                        await bridge.clear_history()
+                        if bridge.dialogue_manager:
+                            bridge.dialogue_manager.clear_history()
+                        await bridge.manager.send_personal_message(
+                            websocket,
+                            Message(
+                                id=str(uuid.uuid4()),
+                                type="system",
+                                content="历史已清除",
+                                timestamp=datetime.now().isoformat()
+                            )
+                        )
                     elif command == "explain":
-                        await bridge.explain_last_intent(websocket)
-                        
+                        message = args.get("message", "")
+                        if bridge.dialogue_manager and message:
+                            explanation = bridge.dialogue_manager.explain_routing(message)
+                            await bridge.manager.send_personal_message(
+                                websocket,
+                                Message(
+                                    id=str(uuid.uuid4()),
+                                    type="system",
+                                    content=explanation,
+                                    timestamp=datetime.now().isoformat()
+                                )
+                            )
+
         except WebSocketDisconnect:
             await bridge.manager.disconnect(websocket)
         except Exception as e:
             console.print(f"[red]WebSocket error: {e}[/red]")
             await bridge.manager.disconnect(websocket)
-    
+
     return app
+
+
+async def start_server(
+    config: Config,
+    working_dir: str,
+    port: int = 8080,
+    use_ngrok: bool = False,
+    ngrok_auth: Optional[str] = None
+):
+    """Start the FastAPI server."""
+    import uvicorn
+    from uvicorn.config import Config as UvicornConfig
+
+    app = create_app(config, working_dir)
+
+    # Start ngrok if requested
+    if use_ngrok:
+        try:
+            ngrok_tunnel = NgrokTunnel(ngrok_auth)
+            public_url = await ngrok_tunnel.start(port)
+            console.print(f"[green]Public URL: {public_url}[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not start ngrok: {e}[/yellow]")
+
+    # Show local access info
+    console.print(f"[green]Server started at:[/green]")
+    console.print(f"  - Local:   http://localhost:{port}")
+
+    # Try to show local IP
+    try:
+        import socket
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        console.print(f"  - Network: http://{local_ip}:{port}")
+    except:
+        pass
+
+    # Run server using Server class to avoid event loop issues
+    uvicorn_config = UvicornConfig(
+        app=app,
+        host="0.0.0.0",
+        port=port,
+        log_level="info"
+    )
+    server = uvicorn.Server(config=uvicorn_config)
+    await server.serve()
