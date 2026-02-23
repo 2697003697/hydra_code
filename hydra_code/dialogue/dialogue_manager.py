@@ -1,5 +1,5 @@
 """
-Dialogue Manager - Central hub for handling user conversations.
+对话管理器 - 处理用户对话的核心枢纽。
 """
 
 import asyncio

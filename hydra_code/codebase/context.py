@@ -1,6 +1,6 @@
 """
-Smart context management for large codebases.
-Implements lazy loading and intelligent context building.
+为大型代码库提供智能的上下文管理。
+实现延迟加载与智能上下文构建。
 """
 
 import os

@@ -1,5 +1,5 @@
 """
-Replace Claude Code style UI components with Opus Code style.
+ UI 组件风格。
 """
 
 from typing import Optional, Deque

@@ -1,5 +1,5 @@
 """
-Ngrok and Tailscale tunnel integration for remote access.
+Ngrok 和 Tailscale 隧道集成，用于远程访问。
 """
 
 import asyncio

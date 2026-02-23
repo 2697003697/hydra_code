@@ -1,5 +1,5 @@
 """
-Long-term Memory - Integrates all memory systems.
+长期记忆 - 整合所有记忆系统。
 """
 
 import os
@@ -12,7 +12,7 @@ from .context_summary import ContextSummary
 
 
 class LongTermMemory:
-    """Unified long-term memory system."""
+    """统一的长期记忆系统。"""
     
     def __init__(self, working_dir: str, user_id: str = "default"):
         self.working_dir = working_dir
@@ -68,14 +68,14 @@ class LongTermMemory:
         return self.user_profile.get_favorite_mode()
     
     def clear(self):
-        """Clear all memory."""
+        """清除所有记忆。"""
         self.user_profile = UserProfile(self._profile_path)
         self.habit_memory = HabitMemory(self._habits_path)
         self.context_summary = ContextSummary(self._context_path)
         self.save()
     
     def save(self):
-        """Save all memory components."""
+        """保存所有记忆组件。"""
         self.user_profile.save()
         self.habit_memory.save()
         self.context_summary.save()

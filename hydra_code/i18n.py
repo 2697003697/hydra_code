@@ -1,6 +1,6 @@
 """
-Internationalization (i18n) support for Hydra Code.
-Supports Chinese and English languages.
+Hydra Code 的国际化（i18n）支持。
+支持中文和英文两种语言。
 """
 
 from dataclasses import dataclass

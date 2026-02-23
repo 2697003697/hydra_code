@@ -1,5 +1,5 @@
 """
-User Profile - Stores and learns user preferences over time.
+用户配置文件 - 存储和学习用户偏好。
 """
 
 import json

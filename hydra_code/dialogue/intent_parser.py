@@ -1,5 +1,5 @@
 """
-Intent Parser - Analyzes user messages to determine intent.
+意图解析器 - 分析用户消息以确定意图。
 """
 
 import re

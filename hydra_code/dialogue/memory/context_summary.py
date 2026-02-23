@@ -1,5 +1,5 @@
 """
-Context Summary - Summarizes conversation history for context.
+Context Summary - 总结对话历史记录以提供上下文。
 """
 
 import json
@@ -12,7 +12,7 @@ from collections import defaultdict
 
 @dataclass
 class ConversationSummary:
-    """A summary of recent conversation history."""
+    """最近对话历史记录的总结。"""
     topics: list[str] = field(default_factory=list)
     key_points: list[str] = field(default_factory=list)
     unresolved_issues: list[str] = field(default_factory=list)
@@ -20,7 +20,7 @@ class ConversationSummary:
 
 
 class ContextSummary:
-    """Maintains a summary of conversation context."""
+    """维护对话上下文的总结。"""
     
     def __init__(self, storage_path: Optional[str] = None, max_history: int = 100):
         self.storage_path = storage_path
@@ -33,7 +33,7 @@ class ContextSummary:
             self.load()
     
     def add_message(self, role: str, content: str, intent: Optional[str] = None):
-        """Add a message to history."""
+        """添加一条消息到历史记录。"""
         self.messages.append({
             "role": role,
             "content": content[:500],
@@ -48,7 +48,7 @@ class ContextSummary:
             self.messages = self.messages[-self.max_history:]
     
     def update_summary(self):
-        """Update the conversation summary."""
+        """更新对话总结。"""
         if not self.messages:
             return
         
@@ -85,17 +85,17 @@ class ContextSummary:
         return intents
     
     def get_dominant_topic(self) -> Optional[str]:
-        """Get the most common topic."""
+        """获取最近最常见的主题。"""
         if not self.topic_counts:
             return None
         return max(self.topic_counts, key=self.topic_counts.get)
     
     def should_summarize(self) -> bool:
-        """Check if we should generate a new summary."""
+        """检查是否应该生成新的总结。"""
         return len(self.messages) % 50 == 0
     
     def save(self):
-        """Save to disk."""
+        """保存到磁盘。"""
         if not self.storage_path:
             return
         
@@ -115,7 +115,7 @@ class ContextSummary:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
     def load(self):
-        """Load from disk."""
+        """从磁盘加载。"""
         if not self.storage_path or not Path(self.storage_path).exists():
             return
         
@@ -138,7 +138,7 @@ class ContextSummary:
             pass
     
     def clear(self):
-        """Clear all history."""
+        """清除所有历史记录。"""
         self.messages.clear()
         self.topic_counts.clear()
         self.summary = ConversationSummary()

@@ -1,8 +1,10 @@
 """
-FastAPI application for Hydra Code web server.
+FastAPI 应用程序，用于 Hydra Code 网页服务器。
 """
 
 import asyncio
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -13,14 +15,14 @@ from fastapi.templating import Jinja2Templates
 from rich.console import Console
 
 from ..config import Config, load_config
-from .connection_manager import ConnectionManager
+from .connection_manager import ConnectionManager, Message
 from .chat_bridge import ChatBridge
 from .ngrok_tunnel import NgrokTunnel
 
 console = Console()
 
 # HTML template for mobile interface
-HTML_TEMPLATE = """
+HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -47,9 +49,9 @@ HTML_TEMPLATE = """
             color: white;
             padding: 12px 16px;
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            align-items: center;
+            flex-shrink: 0;
         }
         
         .header h1 {
@@ -61,14 +63,14 @@ HTML_TEMPLATE = """
             display: flex;
             align-items: center;
             gap: 6px;
-            font-size: 12px;
+            font-size: 13px;
         }
         
         .status-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #4ade80;
+            background: #10b981;
             animation: pulse 2s infinite;
         }
         
@@ -105,7 +107,7 @@ HTML_TEMPLATE = """
         .message.assistant {
             align-self: flex-start;
             background: white;
-            color: #333;
+            color: #1f2937;
             border-bottom-left-radius: 4px;
             box-shadow: 0 1px 2px rgba(0,0,0,0.1);
         }
@@ -114,31 +116,57 @@ HTML_TEMPLATE = """
             align-self: center;
             background: #e5e7eb;
             color: #6b7280;
-            font-size: 12px;
+            font-size: 13px;
             padding: 6px 12px;
-            border-radius: 12px;
+            max-width: 90%;
+        }
+        
+        .message pre {
+            background: #1f2937;
+            color: #e5e7eb;
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 13px;
+            margin: 8px 0;
+        }
+        
+        .message code {
+            background: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .message.assistant code {
+            background: #f3f4f6;
+            color: #1f2937;
         }
         
         .input-container {
-            background: white;
             padding: 12px 16px;
+            background: white;
             border-top: 1px solid #e5e7eb;
             display: flex;
-            gap: 12px;
-            align-items: flex-end;
+            gap: 8px;
+            flex-shrink: 0;
         }
         
         .input-wrapper {
             flex: 1;
+            display: flex;
+            align-items: center;
             background: #f3f4f6;
             border-radius: 20px;
-            padding: 8px 16px;
+            padding: 0 16px;
         }
         
-        textarea {
-            width: 100%;
+        .input-wrapper textarea {
+            flex: 1;
             border: none;
             background: transparent;
+            padding: 10px 0;
             font-size: 15px;
             resize: none;
             outline: none;
@@ -157,38 +185,12 @@ HTML_TEMPLATE = """
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            transition: transform 0.2s;
-        }
-        
-        .send-btn:active {
-            transform: scale(0.95);
+            flex-shrink: 0;
         }
         
         .send-btn:disabled {
-            background: #9ca3af;
+            background: #c7c7c7;
             cursor: not-allowed;
-        }
-        
-        .typing {
-            display: flex;
-            gap: 4px;
-            padding: 12px 16px;
-        }
-        
-        .typing span {
-            width: 8px;
-            height: 8px;
-            background: #9ca3af;
-            border-radius: 50%;
-            animation: bounce 1.4s infinite ease-in-out both;
-        }
-        
-        .typing span:nth-child(1) { animation-delay: -0.32s; }
-        .typing span:nth-child(2) { animation-delay: -0.16s; }
-        
-        @keyframes bounce {
-            0%, 80%, 100% { transform: scale(0); }
-            40% { transform: scale(1); }
         }
         
         .toolbar {
@@ -198,6 +200,8 @@ HTML_TEMPLATE = """
             background: white;
             border-top: 1px solid #e5e7eb;
             overflow-x: auto;
+            flex-shrink: 0;
+            -webkit-overflow-scrolling: touch;
         }
         
         .toolbar button {
@@ -219,7 +223,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <h1>🐍 Hydra Code</h1>
-        <div class="status">
+        <div class="status" id="status-indicator">
             <span class="status-dot"></span>
             <span id="status-text">在线</span>
         </div>
@@ -255,59 +259,166 @@ HTML_TEMPLATE = """
     </div>
     
     <script>
-        const ws = new WebSocket(`ws://${window.location.host}/ws`);
+        let ws = null;
         const chatContainer = document.getElementById('chat-container');
         const messageInput = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         const statusText = document.getElementById('status-text');
+        const statusIndicator = document.getElementById('status-indicator');
         const fileInput = document.getElementById('file-input');
         
         let isProcessing = false;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        let reconnectInterval = null;
+        let isConnecting = false;
         
-        ws.onopen = () => {
-            statusText.textContent = '在线';
-        };
-        
-        ws.onclose = () => {
-            statusText.textContent = '离线';
-            addMessage('system', '连接已断开，请刷新页面重试');
-        };
-        
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+        function connectWebSocket() {
+            // 防止重复连接
+            if (isConnecting) {
+                return;
+            }
             
-            if (data.type === 'status') {
-                if (data.content === 'processing') {
-                    showTyping();
-                    isProcessing = true;
-                    sendBtn.disabled = true;
+            // 如果已经有连接，不要重复创建
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+            
+            isConnecting = true;
+            
+            try {
+                ws = new WebSocket(`ws://${window.location.host}/ws`);
+            } catch (e) {
+                console.error('WebSocket creation failed:', e);
+                isConnecting = false;
+                return;
+            }
+            
+            ws.onopen = () => {
+                statusText.textContent = '在线';
+                statusIndicator.classList.remove('error');
+                statusIndicator.classList.remove('loading');
+                reconnectAttempts = 0;
+                isConnecting = false;
+                if (reconnectInterval) {
+                    clearInterval(reconnectInterval);
+                    reconnectInterval = null;
+                }
+            };
+            
+            ws.onclose = () => {
+                statusText.textContent = '离线';
+                statusIndicator.classList.remove('loading');
+                statusIndicator.classList.add('error');
+                isConnecting = false;
+                
+                // 避免重复创建重连定时器
+                if (reconnectInterval) {
+                    return;
+                }
+                
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectInterval = setInterval(() => {
+                        reconnectAttempts++;
+                        if (reconnectAttempts <= maxReconnectAttempts) {
+                            addMessage('system', `连接已断开，尝试重连 (${reconnectAttempts}/${maxReconnectAttempts})...`);
+                            connectWebSocket();
+                        } else {
+                            clearInterval(reconnectInterval);
+                            reconnectInterval = null;
+                            addMessage('system', '连接已断开，请刷新页面重试');
+                        }
+                    }, 2000);
                 } else {
+                    addMessage('system', '连接已断开，请刷新页面重试');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                isConnecting = false;
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'status') {
+                    if (data.content === 'loading') {
+                        showTyping();
+                        isProcessing = true;
+                        sendBtn.disabled = true;
+                        statusIndicator.classList.add('loading');
+                    } else if (data.content === 'idle') {
+                        hideTyping();
+                        isProcessing = false;
+                        sendBtn.disabled = false;
+                        statusIndicator.classList.remove('loading');
+                        statusIndicator.classList.add('idle');
+                    } else if (data.content === 'error') {
+                        hideTyping();
+                        isProcessing = false;
+                        sendBtn.disabled = false;
+                        statusIndicator.classList.remove('loading');
+                        statusIndicator.classList.add('error');
+                        addMessage('system', '⚠️ ' + (data.metadata?.message || '发生错误'));
+                    } else {
+                        hideTyping();
+                        isProcessing = false;
+                        sendBtn.disabled = false;
+                    }
+                } else if (data.type === 'system' && data.content && data.content.startsWith('[Error:')) {
                     hideTyping();
                     isProcessing = false;
                     sendBtn.disabled = false;
+                    addMessage('system', '⚠️ ' + data.content);
+                } else if (data.type === 'file') {
+                    hideTyping();
+                    addMessage('system', data.content || '开始下载文件');
+                    if (data.metadata && data.metadata.url && data.metadata.is_download) {
+                        triggerDownload(data.metadata.url);
+                    }
+                    isProcessing = false;
+                    sendBtn.disabled = false;
+                } else {
+                    hideTyping();
+                    addMessage(data.type, data.content);
+                    isProcessing = false;
+                    sendBtn.disabled = false;
                 }
-            } else if (data.type === 'file') {
-                hideTyping();
-                addMessage('system', data.content || '开始下载文件');
-                if (data.metadata && data.metadata.url) {
-                    triggerDownload(data.metadata.url);
-                }
-                isProcessing = false;
-                sendBtn.disabled = false;
-            } else {
-                hideTyping();
-                addMessage(data.type, data.content);
-                isProcessing = false;
-                sendBtn.disabled = false;
-            }
-        };
+            };
+        }
         
         function addMessage(type, content) {
             const div = document.createElement('div');
             div.className = `message ${type}`;
-            div.textContent = content;
+            div.innerHTML = formatContent(content);
             chatContainer.appendChild(div);
             chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        function formatContent(text) {
+            if (!text) return '';
+            
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+            
+            html = html
+                .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                .replace(/^\* (.+)$/gm, '<li>$1</li>')
+                .replace(/^- (.+)$/gm, '<li>$1</li>')
+                .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/\n/g, '<br>');
+            
+            return `<p>${html}</p>`;
         }
         
         function triggerDownload(url) {
@@ -338,6 +449,12 @@ HTML_TEMPLATE = """
             const content = messageInput.value.trim();
             if (!content || isProcessing) return;
             
+            // 检查 WebSocket 连接状态
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('system', '连接未建立，请稍后再试');
+                return;
+            }
+            
             ws.send(JSON.stringify({
                 type: 'message',
                 content: content
@@ -350,6 +467,10 @@ HTML_TEMPLATE = """
         }
         
         function setMode(mode) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('system', '连接未建立');
+                return;
+            }
             ws.send(JSON.stringify({
                 type: 'command',
                 command: 'mode',
@@ -409,6 +530,10 @@ HTML_TEMPLATE = """
         }
         
         function clearHistory() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('system', '连接未建立');
+                return;
+            }
             ws.send(JSON.stringify({
                 type: 'command',
                 command: 'clear'
@@ -423,6 +548,10 @@ HTML_TEMPLATE = """
                 return;
             }
             const lastUserMsg = messages[messages.length - 1].textContent;
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('system', '连接未建立');
+                return;
+            }
             ws.send(JSON.stringify({
                 type: 'command',
                 command: 'explain',
@@ -442,6 +571,9 @@ HTML_TEMPLATE = """
         messageInput.addEventListener('input', () => {
             messageInput.rows = Math.min(5, Math.max(1, messageInput.value.split('\\n').length));
         });
+        
+        // Initialize connection
+        connectWebSocket();
     </script>
 </body>
 </html>
@@ -498,12 +630,17 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
         
         destination.parent.mkdir(parents=True, exist_ok=True)
         content = await file.read()
-        destination.write_bytes(content)
         
+        # Write file asynchronously to avoid blocking
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, destination.write_bytes, content)
+        
+        # Return simple response, let frontend handle adding message to chat
         return {
             "success": True,
             "path": str(destination.relative_to(base_dir)),
             "size": len(content),
+            "filename": file.filename,
         }
     
     @app.get("/api/files/download")
@@ -527,83 +664,32 @@ def create_app(config: Config, working_dir: str) -> FastAPI:
                 data = await websocket.receive_json()
                 
                 if data.get("type") == "message":
-                    content = data.get("content", "").strip()
-                    if content:
-                        await bridge.handle_message(client_id, content)
-                
+                    await bridge.handle_message(websocket, data.get("content", ""))
                 elif data.get("type") == "command":
-                    command = data.get("command", "")
+                    command = data.get("command")
                     args = data.get("args", {})
-                    await bridge.handle_command(client_id, command, args)
                     
+                    if command == "mode":
+                        mode = args.get("mode", "auto")
+                        await bridge.set_mode(mode)
+                        await bridge.manager.send_personal_message(
+                            websocket,
+                            Message(
+                                id=str(uuid.uuid4()),
+                                type="system",
+                                content=f"已切换到 {mode} 模式",
+                                timestamp=datetime.now().isoformat()
+                            )
+                        )
+                    elif command == "clear":
+                        await bridge.clear_history()
+                    elif command == "explain":
+                        await bridge.explain_last_intent(websocket)
+                        
         except WebSocketDisconnect:
+            await bridge.manager.disconnect(websocket)
+        except Exception as e:
+            console.print(f"[red]WebSocket error: {e}[/red]")
             await bridge.manager.disconnect(websocket)
     
     return app
-
-
-async def start_server(
-    config: Config,
-    working_dir: str,
-    port: int = 8080,
-    use_ngrok: bool = False,
-    ngrok_auth: Optional[str] = None
-):
-    """Start the web server with optional ngrok tunnel."""
-    from uvicorn import Config as UvicornConfig, Server
-    
-    app = create_app(config, working_dir)
-    
-    # Get local IP for display
-    local_ip = NgrokTunnel.get_local_ip()
-    tailscale_ips = NgrokTunnel.get_tailscale_ips() if NgrokTunnel.is_tailscale_running() else []
-    
-    console.print(f"\n[bold cyan]Starting Hydra Code Server...[/bold cyan]")
-    console.print(f"[dim]Local:[/dim]   http://localhost:{port}")
-    
-    if local_ip != "127.0.0.1":
-        console.print(f"[green]LAN:[/green]     http://{local_ip}:{port}")
-        console.print(f"[dim]         同一WiFi下的手机/其他设备可访问此地址[/dim]")
-    else:
-        console.print(f"[yellow]LAN:[/yellow]     无法获取局域网IP")
-    
-    # Display Tailscale IPs if available
-    if tailscale_ips:
-        console.print(f"[cyan]Tailscale:[/cyan]")
-        for ip in tailscale_ips:
-            console.print(f"           http://{ip}:{port}")
-        console.print(f"[dim]         远程设备通过Tailscale网络可访问此地址[/dim]")
-    else:
-        console.print(f"[dim]Tailscale:[/dim]  未检测到Tailscale运行")
-        console.print(f"[dim]         如已安装Tailscale，请确保已登录并连接[/dim]")
-    
-    console.print("")
-    
-    # Start ngrok if requested
-    tunnel = None
-    if use_ngrok:
-        try:
-            tunnel = NgrokTunnel(auth_token=ngrok_auth)
-            public_url = tunnel.start(port)
-            console.print(f"[green]Public:[/green] {public_url}")
-        except Exception as e:
-            console.print(f"[red]Ngrok failed: {e}[/red]")
-            console.print(f"[dim]Use --ngrok-auth with your token, or use LAN address instead[/dim]")
-    
-    console.print("")
-    
-    # Configure and start server
-    uvicorn_config = UvicornConfig(
-        app=app,
-        host="0.0.0.0",
-        port=port,
-        log_level="warning"
-    )
-    server = Server(uvicorn_config)
-    
-    try:
-        await server.serve()
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Shutting down server...[/yellow]")
-        if tunnel:
-            tunnel.stop()

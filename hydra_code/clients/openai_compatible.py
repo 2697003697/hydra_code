@@ -1,6 +1,6 @@
 """
-OpenAI-compatible API client.
-Works with StepFun, Qwen, DeepSeek, GLM and other OpenAI-compatible APIs.
+OpenAI兼容API客户端。
+支持StepFun、Qwen、DeepSeek、GLM等OpenAI兼容API。
 """
 
 import json
@@ -108,7 +108,11 @@ class OpenAICompatibleClient(BaseClient):
                     "enable_thinking": True,
                 }
 
-        response = await self._client.chat.completions.create(**kwargs)
+        try:
+            response = await self._client.chat.completions.create(**kwargs)
+        except Exception as e:
+            error_msg = str(e)
+            raise Exception(error_msg) from None
 
         choice = response.choices[0]
         content = choice.message.content
@@ -156,7 +160,11 @@ class OpenAICompatibleClient(BaseClient):
         if self.enable_reasoning and (self.provider == "deepseek" or "deepseek" in self.base_url.lower()):
              kwargs["reasoning_effort"] = "high"
 
-        stream = await self._client.chat.completions.create(**kwargs)
+        try:
+            stream = await self._client.chat.completions.create(**kwargs)
+        except Exception as e:
+            error_msg = str(e)
+            raise Exception(error_msg) from None
 
         content_parts: list[str] = []
         thinking_parts: list[str] = []

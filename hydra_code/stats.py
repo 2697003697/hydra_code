@@ -1,5 +1,5 @@
 """
-Simple API call statistics tracking.
+简单的 API 调用统计跟踪。
 """
 
 from dataclasses import dataclass, field

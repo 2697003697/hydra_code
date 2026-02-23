@@ -1,6 +1,6 @@
 """
-Configuration management for Hydra Code.
-Supports ~/.hydra-code config file for API keys and role mappings.
+Hydra Code 配置管理。
+支持通过 ~/.hydra-code 配置文件管理 API 密钥和角色映射。
 """
 
 import os
@@ -13,6 +13,7 @@ import yaml
 
 @dataclass
 class RoleConfig:
+    """角色配置。"""
     role: str
     provider: str = "openai"
     api_key: Optional[str] = None

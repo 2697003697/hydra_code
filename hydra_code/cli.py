@@ -1,5 +1,5 @@
 """
-Main CLI entry point for Hydra Code.
+Hydra Code 的主 CLI 入口点。
 """
 
 import argparse

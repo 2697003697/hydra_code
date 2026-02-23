@@ -1,5 +1,5 @@
 """
-Base client interface and data structures.
+基础客户端接口与数据结构。
 """
 
 import json

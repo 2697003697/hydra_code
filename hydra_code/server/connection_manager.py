@@ -33,6 +33,7 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         """Accept new WebSocket connection."""
         await websocket.accept()
+        
         async with self._lock:
             self.active_connections.append(websocket)
         
@@ -49,9 +50,32 @@ class ConnectionManager:
         )
         
         # Send recent history
+        # Filter out file download triggers from history to prevent re-downloading
         async with self._lock:
             for msg in self.message_history[-20:]:  # Last 20 messages
-                await self.send_personal_message(websocket, msg)
+                if msg.type == "file":
+                    # Create a copy to modify metadata without affecting original
+                    # Or just send it but ensure frontend knows it's history
+                    # We can add a 'replay' flag
+                    
+                    # Safer: Don't send file messages that were auto-downloads
+                    # Or modify them to be just links
+                    
+                    # Let's clone and mark as history
+                    new_msg = Message(
+                        id=msg.id,
+                        type="file", # Keep as file so UI renders it
+                        content=msg.content,
+                        timestamp=msg.timestamp,
+                        metadata=msg.metadata.copy() if msg.metadata else {}
+                    )
+                    # Remove is_download flag so frontend doesn't trigger download
+                    if new_msg.metadata and "is_download" in new_msg.metadata:
+                        del new_msg.metadata["is_download"]
+                    
+                    await self.send_personal_message(websocket, new_msg)
+                else:
+                    await self.send_personal_message(websocket, msg)
 
     async def disconnect(self, websocket: WebSocket):
         """Remove WebSocket connection."""
