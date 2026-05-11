@@ -3,7 +3,6 @@ Command execution tools.
 """
 
 import asyncio
-import platform
 import re
 from typing import Any
 
@@ -51,7 +50,7 @@ class RunCommandTool(Tool):
     def _extract_package_name(self, module_name: str) -> str:
         """Convert module name to package name."""
         package_map = {
-            "PIL": "pillow",
+            "pil": "pillow",
             "cv2": "opencv-python",
             "sklearn": "scikit-learn",
             "np": "numpy",
@@ -79,27 +78,17 @@ class RunCommandTool(Tool):
             "cryptography": "cryptography",
             "packaging": "packaging",
         }
-        
+
         return package_map.get(module_name.lower(), module_name.lower())
 
     async def _run_single_command(self, command: str, working_dir: str, timeout: int) -> tuple[int, str]:
         """Run a single command and return exit code and output."""
-        if platform.system() == "Windows":
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=working_dir,
-                shell=True,
-            )
-        else:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=working_dir,
-                shell=True,
-            )
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_dir,
+        )
 
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -121,7 +110,7 @@ class RunCommandTool(Tool):
     async def execute(self, arguments: dict[str, Any], working_dir: str) -> ToolResult:
         command = arguments.get("command", "")
         timeout = arguments.get("timeout", 120)
-        auto_install = arguments.get("auto_install", True)
+        auto_install = arguments.get("auto_install", False)
 
         if not command:
             return ToolResult(success=False, output="", error="No command provided")

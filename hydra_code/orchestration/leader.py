@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Callable
 from enum import Enum
 
+import time
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
@@ -80,8 +82,10 @@ class LeaderCollaborator:
     async def execute(self, user_request: str, context: str = "", domain: str = "coding", intent: str = "new", complexity: str = "complex") -> str:
         """Execute the Leader-Worker workflow."""
         self.state = CollaborationState(user_request, self.working_dir)
-        
-        ui.print_phase("Leader Mode", f"Leader ({self.leader_role.value}) 正在统筹全局 (领域: {domain}, 意图: {intent}, 复杂度: {complexity})")
+
+        monitor = ui.create_leader_monitor(self.leader_role.value, self.max_steps)
+        monitor.start_time = time.time()
+        monitor.set_phase(f"统筹全局 (领域: {domain}, 意图: {intent}, 复杂度: {complexity})")
         
         leader_agent = self.agents.get(self.leader_role)
         if not leader_agent:
@@ -222,110 +226,118 @@ class LeaderCollaborator:
         tools.extend([delegate_tool, review_tool])
 
         step = 0
-        while step < self.max_steps:
-            step += 1
-            console.print(f"\n[bold cyan]Leader Round {step}[/bold cyan]")
-            
-            # Leader thinks and acts
-            try:
-                response = await self._call_agent(leader_agent, messages, tools)
-            except Exception as e:
-                console.print(f"[red]Leader error: {e}[/red]")
-                break
-                
-            messages.append(response)
-            
-            if not response.tool_calls:
-                # If Leader just talks, check if it's the final answer
-                content_lower = (response.content or "").lower()
-                if "任务完成" in content_lower or "task completed" in content_lower:
-                    return response.content or "任务完成"
-                continue
+        with Live(monitor, console=console, refresh_per_second=4, transient=False):
+            while step < self.max_steps:
+                step += 1
+                monitor.update_round(step, self.max_steps)
+                monitor.set_phase(f"Round {step}: Leader 思考中...")
+                monitor.add_log(f"Round {step}/{self.max_steps} started")
 
-            # Handle Tool Calls
-            for tool_call in response.tool_calls:
-                tool_name = tool_call.name
-                args = tool_call.arguments
-                
-                result_content = ""
-                
-                if tool_name == "delegate_task":
-                    worker_role_str = args.get("worker_role")
-                    task_desc = args.get("task_description")
-                    
-                    try:
-                        # Handle case-insensitive role matching
-                        worker_role = None
-                        for r in ModelRole:
-                            if r.value == worker_role_str:
-                                worker_role = r
-                                break
-                        if not worker_role:
-                            # Fallback try to find by name
+                # Leader thinks and acts
+                try:
+                    response = await self._call_agent(leader_agent, messages, tools, monitor)
+                except Exception as e:
+                    monitor.add_log(f"[red]Leader error: {e}[/red]")
+                    break
+
+                messages.append(response)
+
+                if not response.tool_calls:
+                    content_lower = (response.content or "").lower()
+                    if "任务完成" in content_lower or "task completed" in content_lower:
+                        monitor.set_phase("任务完成")
+                        monitor.add_log("Leader reported task completion")
+                        return response.content or "任务完成"
+                    monitor.add_log("Leader replied (no tools), continuing...")
+                    continue
+
+                # Handle Tool Calls
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.name
+                    args = tool_call.arguments
+
+                    result_content = ""
+
+                    if tool_name == "delegate_task":
+                        worker_role_str = args.get("worker_role")
+                        task_desc = args.get("task_description")
+
+                        try:
+                            worker_role = None
                             for r in ModelRole:
-                                if r.name.lower() == str(worker_role_str).lower():
+                                if r.value == worker_role_str:
                                     worker_role = r
                                     break
-                                    
-                        if worker_role:
-                            task_id = f"task_{len(self.tasks) + 1}"
-                            self.tasks[task_id] = SubTask(task_id, task_desc, worker_role)
-                            
-                            ui.print_phase("Delegation", f"Leader 分派任务给 {worker_role.value}: {task_desc[:50]}...")
-                            
-                            # Execute Worker Task immediately (synchronous for now, can be async)
-                            worker_result = await self._execute_worker_task(task_id)
-                            result_content = f"Task {task_id} assigned to {worker_role.value}.\nExecution Result:\n{worker_result}"
+                            if not worker_role:
+                                for r in ModelRole:
+                                    if r.name.lower() == str(worker_role_str).lower():
+                                        worker_role = r
+                                        break
+
+                            if worker_role:
+                                task_id = f"task_{len(self.tasks) + 1}"
+                                self.tasks[task_id] = SubTask(task_id, task_desc, worker_role)
+                                monitor.add_task(task_id, task_desc, worker_role.value, "running")
+                                monitor.set_phase(f"Round {step}: 分派 {worker_role.value}")
+                                monitor.add_log(f"Delegating {task_id} to {worker_role.value}: {task_desc[:40]}...")
+
+                                worker_result = await self._execute_worker_task(task_id, monitor)
+                                monitor.update_task(task_id, "completed")
+                                monitor.add_log(f"{task_id} completed by {worker_role.value}")
+                                result_content = f"Task {task_id} assigned to {worker_role.value}.\nExecution Result:\n{worker_result}"
+                            else:
+                                result_content = f"Error: Invalid worker role {worker_role_str}"
+
+                        except Exception as e:
+                            result_content = f"Error in delegation: {e}"
+
+                    elif tool_name == "review_task":
+                        task_id = args.get("task_id")
+                        approved = args.get("approved")
+                        feedback = args.get("feedback", "")
+
+                        if task_id in self.tasks:
+                            task = self.tasks[task_id]
+                            task.status = "reviewed" if approved else "failed"
+                            task.feedback = feedback
+                            status_str = "Approved" if approved else "Rejected"
+                            monitor.update_task(task_id, "reviewed" if approved else "failed")
+                            monitor.add_log(f"Review {task_id}: {status_str}")
+                            result_content = f"Task {task_id} marked as {status_str}."
                         else:
-                            result_content = f"Error: Invalid worker role {worker_role_str}"
-                        
-                    except Exception as e:
-                        result_content = f"Error in delegation: {e}"
+                            result_content = f"Error: Task {task_id} not found."
 
-                elif tool_name == "review_task":
-                    task_id = args.get("task_id")
-                    approved = args.get("approved")
-                    feedback = args.get("feedback", "")
-                    
-                    if task_id in self.tasks:
-                        task = self.tasks[task_id]
-                        task.status = "reviewed" if approved else "failed"
-                        task.feedback = feedback
-                        status_str = "Approved" if approved else "Rejected"
-                        ui.print_phase("Review", f"Leader 审查 {task_id}: {status_str}. Feedback: {feedback}")
-                        result_content = f"Task {task_id} marked as {status_str}."
                     else:
-                        result_content = f"Error: Task {task_id} not found."
+                        # Standard tools
+                        tool = self.tool_registry.get(tool_name)
+                        if tool:
+                            ui.print_tool_start(tool_name, args)
+                            res = await tool.execute(args, self.working_dir)
+                            ui.print_tool_output(res.output if res.success else str(res.error), res.success)
+                            monitor.add_log(f"Tool: {tool_name}")
+                            result_content = res.output if res.success else f"Error: {res.error}"
+                        else:
+                            result_content = f"Error: Unknown tool {tool_name}"
 
-                else:
-                    # Standard tools
-                    tool = self.tool_registry.get(tool_name)
-                    if tool:
-                        ui.print_tool_start(tool_name, args)
-                        res = await tool.execute(args, self.working_dir)
-                        ui.print_tool_output(res.output if res.success else str(res.error), res.success)
-                        result_content = res.output if res.success else f"Error: {res.error}"
-                    else:
-                        result_content = f"Error: Unknown tool {tool_name}"
-
-                messages.append(Message(
-                    role=Role.TOOL,
-                    content=result_content,
-                    tool_call_id=tool_call.id
-                ))
+                    messages.append(Message(
+                        role=Role.TOOL,
+                        content=result_content,
+                        tool_call_id=tool_call.id
+                    ))
 
         return "Leader execution reached max steps."
 
-    async def _execute_worker_task(self, task_id: str) -> str:
+    async def _execute_worker_task(self, task_id: str, monitor=None) -> str:
         """Execute a task assigned to a worker."""
         task = self.tasks[task_id]
         worker_agent = self.agents.get(task.assigned_to)
-        
+
         if not worker_agent:
             return "Error: Worker agent not found."
-            
-        console.print(f"[dim]Worker {task.assigned_to.value} starting task: {task.description}[/dim]")
-        
+
+        if monitor:
+            monitor.add_log(f"Worker {task.assigned_to.value} starting: {task.description[:30]}...")
+
         system_prompt = f"""你是 {task.assigned_to.value}。
 Leader 分配给你一个任务：
 {task.description}
@@ -336,44 +348,47 @@ Leader 分配给你一个任务：
             Message(role=Role.SYSTEM, content=system_prompt),
             Message(role=Role.USER, content="开始执行任务。")
         ]
-        
+
         tools = self.tool_registry.get_all_definitions()
-        
-        # Simple worker loop (simplified)
+
         for i in range(5):
             try:
-                response = await self._call_agent(worker_agent, messages, tools)
+                response = await self._call_agent(worker_agent, messages, tools, monitor)
             except Exception as e:
                 return f"Worker error: {e}"
-                
+
             messages.append(response)
-            
+
             if not response.tool_calls:
                 task.result = response.content
                 task.status = "completed"
                 return response.content or "Task completed (no content)"
-                
+
             for tool_call in response.tool_calls:
                 tool = self.tool_registry.get(tool_call.name)
                 if tool:
                     ui.print_tool_start(tool_call.name, tool_call.arguments)
                     res = await tool.execute(tool_call.arguments, self.working_dir)
                     ui.print_tool_output(res.output if res.success else str(res.error), res.success)
+                    if monitor:
+                        monitor.add_log(f"Worker tool: {tool_call.name}")
                     tool_content = res.output if res.success else str(res.error)
                     if len(tool_content) > 8000:
                         tool_content = tool_content[:8000] + "\n... [内容已截断]"
                     messages.append(Message(role=Role.TOOL, content=tool_content, tool_call_id=tool_call.id))
                 else:
                     messages.append(Message(role=Role.TOOL, content=f"Error: Unknown tool {tool_call.name}", tool_call_id=tool_call.id))
-        
+
         return "Worker max steps reached."
 
-    async def _call_agent(self, agent: Any, messages: list[Message], tools: list[ToolDefinition] = None) -> Message:
+    async def _call_agent(self, agent: Any, messages: list[Message], tools: list[ToolDefinition] = None, monitor=None) -> Message:
         """Helper to call agent with live streaming."""
         client = agent.client if hasattr(agent, 'client') else agent
         role_name = agent.role.value if hasattr(agent, 'role') else "Assistant"
         
         try:
+            if monitor:
+                monitor.add_log(f"{role_name} thinking...")
             with ui.create_live_session() as session:
                 response = await client.chat_stream(
                     messages=messages,
@@ -384,5 +399,8 @@ Leader 分配给你一个任务：
                 )
             return response
         except Exception as e:
-            console.print(f"[red]Agent {role_name} error: {e}[/red]")
+            if monitor:
+                monitor.add_log(f"[red]{role_name} error: {e}[/red]")
+            else:
+                console.print(f"[red]Agent {role_name} error: {e}[/red]")
             return Message(role=Role.ASSISTANT, content=f"Error: {e}")

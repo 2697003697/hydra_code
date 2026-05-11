@@ -5,13 +5,43 @@ Network tools.
 import asyncio
 import re
 import json
+import ipaddress
 from typing import Any
+from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 import httpx
 
 from ..clients.base import ToolDefinition
 from .base import Tool, ToolResult
+
+_BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "metadata.google.internal"}
+_BLOCKED_PREFIXES = ["169.254.", "10.", "192.168.", "172.16.", "172.17.", "172.18.",
+                     "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
+                     "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
+                     "172.29.", "172.30.", "172.31."]
+
+
+def _is_safe_url(url: str) -> bool:
+    """Check if URL is safe to fetch (not SSRF to internal services)."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname or ""
+        if hostname in _BLOCKED_HOSTS:
+            return False
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return False
+        except ValueError:
+            for prefix in _BLOCKED_PREFIXES:
+                if hostname.startswith(prefix):
+                    return False
+        return True
+    except Exception:
+        return False
 
 
 def extract_text_from_html(html: str) -> str:
@@ -142,6 +172,9 @@ class FetchUrlTool(Tool):
 
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
+
+        if not _is_safe_url(url):
+            return ToolResult(success=False, output="", error="URL blocked: access to internal/private addresses is not allowed")
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:

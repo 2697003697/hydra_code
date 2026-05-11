@@ -105,6 +105,104 @@ class ParallelMonitor:
         )
 
 
+class LeaderMonitor:
+    """Renders leader-worker execution status with task tracking and activity log."""
+    def __init__(self):
+        self.logs: Deque[str] = deque(maxlen=5)
+        self.tasks: dict[str, dict] = {}  # task_id -> {desc, worker, status}
+        self.current_round: int = 0
+        self.max_rounds: int = 15
+        self.leader_role: str = "Leader"
+        self.phase: str = "Initializing"
+        self.spinner = Spinner("dots", style="cyan")
+        self.start_time: float = 0.0
+
+    def add_log(self, message: str):
+        self.logs.append(message)
+
+    def update_round(self, current: int, max_rounds: int = 15):
+        self.current_round = current
+        self.max_rounds = max_rounds
+
+    def set_phase(self, phase: str):
+        self.phase = phase
+
+    def add_task(self, task_id: str, desc: str, worker: str, status: str = "pending"):
+        self.tasks[task_id] = {"desc": desc, "worker": worker, "status": status}
+
+    def update_task(self, task_id: str, status: str):
+        if task_id in self.tasks:
+            self.tasks[task_id]["status"] = status
+
+    def __rich__(self) -> RenderableType:
+        import time
+        elapsed = int(time.time() - self.start_time) if self.start_time else 0
+        elapsed_str = f"{elapsed // 60}m {elapsed % 60}s" if elapsed >= 60 else f"{elapsed}s"
+
+        # Header
+        progress = f"Round {self.current_round}/{self.max_rounds}" if self.current_round > 0 else "Starting..."
+        header_text = f"[bold]{self.leader_role}[/bold]  {progress}  [dim]({elapsed_str})[/dim]"
+        if self.phase:
+            header_text += f"\n[dim]{self.phase}[/dim]"
+
+        # Task table
+        task_table = Table(box=None, show_header=True, padding=(0, 1))
+        task_table.add_column("", width=3)
+        task_table.add_column("Task", ratio=3)
+        task_table.add_column("Worker", ratio=1)
+        task_table.add_column("Status", ratio=1)
+
+        for tid, info in sorted(self.tasks.items()):
+            status = info["status"]
+            if status in ("completed", "reviewed"):
+                icon = Text("✓", style="green")
+                status_style = "green"
+            elif status == "failed":
+                icon = Text("✗", style="red")
+                status_style = "red"
+            elif status == "running":
+                icon = self.spinner
+                status_style = "yellow"
+            else:
+                icon = Text("○", style="dim")
+                status_style = "dim"
+
+            desc_short = info["desc"][:50] + ("..." if len(info["desc"]) > 50 else "")
+            task_table.add_row(icon, desc_short, info["worker"], Text(status, style=status_style))
+
+        # Log panel
+        log_content = "\n".join(self.logs) if self.logs else "[dim]Waiting...[/dim]"
+        log_panel = Panel(
+            Text.from_ansi(log_content) if any("\x1b" in l for l in self.logs) else Text(log_content, style="dim"),
+            title="[cyan]Activity[/cyan]",
+            border_style="cyan dim",
+            box=ROUNDED,
+            height=7,
+            padding=(0, 1)
+        )
+
+        # Combine
+        if self.tasks:
+            content = Group(
+                Text.from_markup(header_text),
+                task_table,
+                log_panel
+            )
+        else:
+            content = Group(
+                Text.from_markup(header_text),
+                log_panel
+            )
+
+        return Panel(
+            content,
+            title="[bold cyan]Leader Mode[/bold cyan]",
+            border_style="cyan",
+            box=ROUNDED,
+            padding=(0, 1)
+        )
+
+
 class StreamRenderer:
     """Renders streaming output with thinking and content blocks."""
     def __init__(self):
@@ -113,21 +211,23 @@ class StreamRenderer:
         self.content_buffer: list[str] = []
         self.tool_status: Optional[str] = None
         self.tool_args_buffer: list[str] = []
-        
+        self.status_text: Optional[str] = None
+        self.tool_status_map: dict[str, str] = {}  # tool_name -> status
+
     def update_thinking(self, chunk: str):
         if not chunk:
             return
         self.thinking_total_chars += len(chunk)
-        
+
         # Append chunk to the last line
         self.thinking_lines[-1] += chunk
-        
+
         # If the last line contains newlines, split it
         if '\n' in self.thinking_lines[-1]:
             parts = self.thinking_lines[-1].split('\n')
             self.thinking_lines.pop() # Remove the incomplete last line
             self.thinking_lines.extend(parts)
-            
+
         # Keep only the last 50 lines to prevent memory/performance issues
         if len(self.thinking_lines) > 50:
             self.thinking_lines = self.thinking_lines[-50:]
@@ -138,6 +238,18 @@ class StreamRenderer:
     def update_tool(self, tool_name: str, args_chunk: str):
         self.tool_status = tool_name
         self.tool_args_buffer.append(args_chunk)
+
+    def update_status(self, text: str):
+        self.status_text = text
+
+    def update_tool_status(self, tool_name: str, status: str, args: str = None):
+        if status.lower() in ("done", "failed", "completed"):
+            self.tool_status_map.pop(tool_name, None)
+        else:
+            display = f"{tool_name}: {status}"
+            if args:
+                display += f" ({str(args)[:30]})"
+            self.tool_status_map[tool_name] = display
         
     def __rich__(self) -> RenderableType:
         renderables = []
@@ -189,20 +301,39 @@ class StreamRenderer:
         if self.tool_status:
             if renderables:
                 renderables.append(Text(" "))
-            
+
             tool_msg = f"Preparing tool call: {self.tool_status}..."
-            
+
             total_chars = sum(len(c) for c in self.tool_args_buffer)
             if total_chars > 0:
                 tool_msg += f" ({total_chars} chars received)"
-                
+
             renderables.append(Panel(
                 Text(tool_msg, style="cyan dim"),
                 border_style="cyan dim",
                 box=ROUNDED,
                 padding=(0, 1)
             ))
-            
+
+        # Render active tool statuses (from update_tool_status)
+        if self.tool_status_map:
+            if renderables:
+                renderables.append(Text(" "))
+            tool_lines = "\n".join(self.tool_status_map.values())
+            renderables.append(Panel(
+                Text(tool_lines, style="cyan"),
+                title="[cyan]Tools[/cyan]",
+                border_style="cyan dim",
+                box=ROUNDED,
+                padding=(0, 1)
+            ))
+
+        # Render status line
+        if self.status_text:
+            if renderables:
+                renderables.append(Text(" "))
+            renderables.append(Text(f"  {self.status_text}", style="dim cyan"))
+
         return Group(*renderables)
 
 
@@ -228,6 +359,12 @@ class LiveStreamSession:
     def update_tool(self, tool_name: str, args_chunk: str):
         self.renderer.update_tool(tool_name, args_chunk)
 
+    def update_status(self, text: str):
+        self.renderer.update_status(text)
+
+    def update_tool_status(self, tool_name: str, status: str, args: str = None):
+        self.renderer.update_tool_status(tool_name, status, args)
+
 
 class ClaudeStyleUI:
     def __init__(self):
@@ -240,6 +377,12 @@ class ClaudeStyleUI:
     def create_parallel_monitor(self, title: str = "Parallel Execution") -> "ParallelMonitor":
         monitor = ParallelMonitor()
         monitor.title = title
+        return monitor
+
+    def create_leader_monitor(self, leader_role: str = "Leader", max_rounds: int = 15) -> "LeaderMonitor":
+        monitor = LeaderMonitor()
+        monitor.leader_role = leader_role
+        monitor.max_rounds = max_rounds
         return monitor
 
     def print_banner(self):

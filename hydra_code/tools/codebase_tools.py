@@ -9,6 +9,7 @@ from typing import Any
 
 from ..clients.base import ToolDefinition
 from .base import Tool, ToolResult
+from .file_tools import _resolve_safe_path
 
 
 class SearchCodebaseTool(Tool):
@@ -42,9 +43,10 @@ class SearchCodebaseTool(Tool):
         if not pattern:
             return ToolResult(success=False, output="", error="No pattern provided")
 
-        path = Path(search_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / search_path
+        resolved = _resolve_safe_path(search_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"Directory not found: {path}")
@@ -58,6 +60,13 @@ class SearchCodebaseTool(Tool):
                 return ToolResult(success=False, output="", error=f"Invalid regex: {e}")
 
         ignore_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv", "build", "dist", ".idea", ".vscode"}
+        search_exts = {
+            ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs",
+            ".c", ".cpp", ".h", ".hpp", ".cs", ".rb", ".php", ".swift", ".kt",
+            ".html", ".css", ".scss", ".less", ".json", ".yaml", ".yml",
+            ".toml", ".xml", ".md", ".txt", ".sh", ".bat", ".ps1",
+            ".sql", ".r", ".m", ".scala", ".lua", ".pl", ".ex", ".exs",
+        }
         results = []
 
         try:
@@ -65,7 +74,7 @@ class SearchCodebaseTool(Tool):
                 dirs[:] = [d for d in dirs if d not in ignore_dirs]
 
                 for file in files:
-                    if not file.endswith((".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".html", ".css", ".json", ".yaml", ".yml", ".md", ".txt")):
+                    if not any(file.endswith(ext) for ext in search_exts):
                         continue
 
                     file_path = Path(root) / file

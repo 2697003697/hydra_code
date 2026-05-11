@@ -12,6 +12,19 @@ from ..clients.base import ToolDefinition
 from .base import Tool, ToolResult
 
 
+def _resolve_safe_path(file_path: str, working_dir: str) -> Path | str:
+    """Resolve a file path and verify it's within the working directory.
+    Returns the resolved Path on success, or an error string on failure."""
+    path = Path(file_path)
+    if not path.is_absolute():
+        path = Path(working_dir) / file_path
+    path = path.resolve()
+    base = Path(working_dir).resolve()
+    if base not in path.parents and path != base:
+        return f"Path traversal denied: {file_path} is outside working directory"
+    return path
+
+
 class ReadFileTool(Tool):
     name = "read_file"
     description = "Read the contents of a file. Use offset and limit to read in chunks. If file is larger than limit, use offset to continue reading from where you left off."
@@ -44,13 +57,14 @@ class ReadFileTool(Tool):
         file_path = arguments.get("file_path", "")
         if not file_path:
             file_path = arguments.get("path", "")
-            
+
         offset = arguments.get("offset", 1)
         limit = arguments.get("limit", 500)
 
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / file_path
+        resolved = _resolve_safe_path(file_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"File not found: {path}")
@@ -59,29 +73,36 @@ class ReadFileTool(Tool):
             return ToolResult(success=False, output="", error=f"Not a file: {path}")
 
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-
-            total_lines = len(lines)
-            
             start = max(0, offset - 1)
-            end = min(total_lines, start + limit)
-            selected_lines = lines[start:end]
-            
+            end = start + limit
+            total_lines = 0
+            selected_lines = []
+
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f):
+                    if i < start:
+                        continue
+                    if i >= end:
+                        total_lines = i + 1 + sum(1 for _ in f)
+                        break
+                    selected_lines.append((i, line))
+                    total_lines = i + 1
+                else:
+                    total_lines = len(selected_lines) + start
+
             has_more = end < total_lines
             has_prev = start > 0
 
             output = ""
-            for i, line in enumerate(selected_lines, start=offset):
-                output += f"{i:6d}\t{line}"
-            
-            info_parts = []
-            info_parts.append(f"第 {start + 1}-{end} 行 / 共 {total_lines} 行")
+            for i, line in selected_lines:
+                output += f"{i + 1:6d}\t{line}"
+
+            info_parts = [f"第 {start + 1}-{start + len(selected_lines)} 行 / 共 {total_lines} 行"]
             if has_prev:
                 info_parts.append(f"上一页: offset={max(1, offset - limit)}")
             if has_more:
                 info_parts.append(f"下一页: offset={end + 1}")
-            
+
             output += f"\n\n[{', '.join(info_parts)}]"
 
             return ToolResult(success=True, output=output)
@@ -125,15 +146,10 @@ class DownloadFileTool(Tool):
         if not path_input:
             return ToolResult(success=False, output="", error="Missing path")
 
-        base_dir = Path(working_dir).resolve()
-        target = Path(path_input)
-        if not target.is_absolute():
-            target = (base_dir / path_input).resolve()
-        else:
-            target = target.resolve()
-
-        if base_dir not in target.parents and target != base_dir:
-            return ToolResult(success=False, output="", error="Invalid path")
+        resolved = _resolve_safe_path(path_input, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        target = resolved
 
         if not target.exists():
             return ToolResult(success=False, output="", error="File not found")
@@ -141,6 +157,7 @@ class DownloadFileTool(Tool):
         if not target.is_file():
             return ToolResult(success=False, output="", error="Not a file")
 
+        base_dir = Path(working_dir).resolve()
         rel_path = target.relative_to(base_dir).as_posix()
         url = f"/api/files/download?path={quote(rel_path)}"
         payload = json.dumps({"path": rel_path, "url": url}, ensure_ascii=False)
@@ -176,7 +193,6 @@ class WriteFileTool(Tool):
         content = arguments.get("content", "")
 
         if not file_path:
-            # 尝试从 path 参数获取（兼容性处理）
             file_path = arguments.get("path", "")
 
         if not file_path:
@@ -186,9 +202,10 @@ class WriteFileTool(Tool):
                 error="No file path provided. Please specify a file path, not a directory.",
             )
 
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / file_path
+        resolved = _resolve_safe_path(file_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         if path.is_dir():
             return ToolResult(
@@ -249,18 +266,26 @@ class EditFileTool(Tool):
         file_path = arguments.get("file_path", "")
         if not file_path:
             file_path = arguments.get("path", "")
-            
+
         old_content = arguments.get("old_content", "")
         if not old_content:
             old_content = arguments.get("old_str", "")
-            
+
         new_content = arguments.get("new_content", "")
         if not new_content:
             new_content = arguments.get("new_str", "")
 
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / file_path
+        if not old_content:
+            return ToolResult(
+                success=False,
+                output="",
+                error="old_content is empty. Provide the exact content to find and replace.",
+            )
+
+        resolved = _resolve_safe_path(file_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"File not found: {path}")
@@ -282,11 +307,8 @@ class EditFileTool(Tool):
                 
                 # Find the start index
                 found_idx = -1
-                if not norm_old_lines:
-                     return ToolResult(success=False, output="", error="Old content is empty")
 
                 # Simple sliding window search on normalized lines
-                # This is O(N*M) but files are usually small enough for this tool
                 if norm_old_lines:
                     for i in range(len(norm_lines) - len(norm_old_lines) + 1):
                         match = True
@@ -368,9 +390,10 @@ class ListDirectoryTool(Tool):
     async def execute(self, arguments: dict[str, Any], working_dir: str) -> ToolResult:
         dir_path = arguments.get("path", ".")
 
-        path = Path(dir_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / dir_path
+        resolved = _resolve_safe_path(dir_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"Directory not found: {path}")
@@ -423,9 +446,10 @@ class SearchFilesTool(Tool):
         pattern = arguments.get("pattern", "*")
         search_path = arguments.get("path", ".")
 
-        path = Path(search_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / search_path
+        resolved = _resolve_safe_path(search_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"Directory not found: {path}")
@@ -473,10 +497,16 @@ class DeleteFileTool(Tool):
 
     async def execute(self, arguments: dict[str, Any], working_dir: str) -> ToolResult:
         file_path = arguments.get("file_path", "")
+        if not file_path:
+            return ToolResult(success=False, output="", error="No file path provided")
 
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / file_path
+        resolved = _resolve_safe_path(file_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
+
+        if path == Path(working_dir).resolve():
+            return ToolResult(success=False, output="", error="Cannot delete the working directory itself")
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"Path not found: {path}")
@@ -487,7 +517,7 @@ class DeleteFileTool(Tool):
             elif path.is_dir():
                 import shutil
                 shutil.rmtree(path)
-            
+
             return ToolResult(success=True, output=f"Successfully deleted: {path}")
         except PermissionError:
             return ToolResult(
@@ -522,9 +552,10 @@ class CreateDirectoryTool(Tool):
     async def execute(self, arguments: dict[str, Any], working_dir: str) -> ToolResult:
         dir_path = arguments.get("directory_path", "")
 
-        path = Path(dir_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / dir_path
+        resolved = _resolve_safe_path(dir_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         try:
             path.mkdir(parents=True, exist_ok=True)
@@ -567,13 +598,15 @@ class MoveFileTool(Tool):
         source = arguments.get("source", "")
         destination = arguments.get("destination", "")
 
-        src_path = Path(source)
-        if not src_path.is_absolute():
-            src_path = Path(working_dir) / source
+        src_resolved = _resolve_safe_path(source, working_dir)
+        if isinstance(src_resolved, str):
+            return ToolResult(success=False, output="", error=src_resolved)
+        src_path = src_resolved
 
-        dst_path = Path(destination)
-        if not dst_path.is_absolute():
-            dst_path = Path(working_dir) / destination
+        dst_resolved = _resolve_safe_path(destination, working_dir)
+        if isinstance(dst_resolved, str):
+            return ToolResult(success=False, output="", error=dst_resolved)
+        dst_path = dst_resolved
 
         if not src_path.exists():
             return ToolResult(success=False, output="", error=f"Source not found: {src_path}")
@@ -623,13 +656,15 @@ class CopyFileTool(Tool):
         source = arguments.get("source", "")
         destination = arguments.get("destination", "")
 
-        src_path = Path(source)
-        if not src_path.is_absolute():
-            src_path = Path(working_dir) / source
+        src_resolved = _resolve_safe_path(source, working_dir)
+        if isinstance(src_resolved, str):
+            return ToolResult(success=False, output="", error=src_resolved)
+        src_path = src_resolved
 
-        dst_path = Path(destination)
-        if not dst_path.is_absolute():
-            dst_path = Path(working_dir) / destination
+        dst_resolved = _resolve_safe_path(destination, working_dir)
+        if isinstance(dst_resolved, str):
+            return ToolResult(success=False, output="", error=dst_resolved)
+        dst_path = dst_resolved
 
         if not src_path.exists():
             return ToolResult(success=False, output="", error=f"Source not found: {src_path}")
@@ -678,12 +713,15 @@ class GetFileInfoTool(Tool):
 
     async def execute(self, arguments: dict[str, Any], working_dir: str) -> ToolResult:
         import datetime
-        
-        file_path = arguments.get("file_path", "")
 
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(working_dir) / file_path
+        file_path = arguments.get("file_path", "")
+        if not file_path:
+            return ToolResult(success=False, output="", error="No file path provided")
+
+        resolved = _resolve_safe_path(file_path, working_dir)
+        if isinstance(resolved, str):
+            return ToolResult(success=False, output="", error=resolved)
+        path = resolved
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"Path not found: {path}")

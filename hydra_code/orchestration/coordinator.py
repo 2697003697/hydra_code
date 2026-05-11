@@ -117,7 +117,7 @@ ROUTING_PROMPT = """你是 Fast 模型，负责判断用户请求的复杂度和
   - modify: 修改/更新/重构现有内容 (Brownfield, e.g. "update readme", "fix bug")
   - qa: 纯问答/解释
 
-回复JSON：
+仅输出一行合法JSON，禁止任何解释、问候语或Markdown代码块。必须直接以{{开头，以}}结尾：
 {{"complexity": "simple/moderate/complex", "domain": "coding/content/general", "intent": "new/modify/qa", "reason": "理由"}}
 """
 
@@ -316,6 +316,24 @@ class RoutingResult:
     reason: str
 
 
+def _extract_json(text: str) -> Optional[str]:
+    m = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+    if m:
+        return m.group(1)
+    depth = 0
+    start = -1
+    for i, c in enumerate(text):
+        if c == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return text[start:i+1]
+    return None
+
+
 class DynamicCoordinator:
     def __init__(self, config: Config, working_dir: str, work_history: Any = None):
         self.config = config
@@ -370,19 +388,19 @@ class DynamicCoordinator:
         messages = [Message(role=Role.USER, content=prompt)]
         
         try:
-            response = await self._call_agent(routing_agent, messages, max_tokens=150)
-            
-            json_match = re.search(r'\{[\s\S]+\}', response)
-            
+            response = await self._call_agent(routing_agent, messages, max_tokens=300)
+
+            json_match = _extract_json(response)
+
             # If Fast fails to output JSON, try Pro if available
             if not json_match and routing_agent.role == ModelRole.FAST and ModelRole.PRO in self.agents:
                 console.print("[dim]Fast模型分析失败，尝试使用Pro模型...[/dim]")
                 pro_agent = self.agents[ModelRole.PRO]
-                response = await self._call_agent(pro_agent, messages, max_tokens=150)
-                json_match = re.search(r'\{[\s\S]+\}', response)
+                response = await self._call_agent(pro_agent, messages, max_tokens=300)
+                json_match = _extract_json(response)
 
             if json_match:
-                result = json.loads(json_match.group())
+                result = json.loads(json_match)
                 complexity_str = result.get("complexity", "simple")
                 domain = result.get("domain", "coding")
                 intent = result.get("intent", "new")
@@ -417,6 +435,7 @@ class DynamicCoordinator:
         self,
         user_request: str,
         on_update: Optional[Callable[[str], None]] = None,
+        memory_context: str = "",
     ) -> str:
         """
         Main entry point for collaboration.
@@ -485,7 +504,7 @@ class DynamicCoordinator:
         # Simple Path -> Single Model
         if routing.complexity == TaskComplexity.SIMPLE:
             ui.print_phase("快速响应", f"检测到简单任务 ({routing.domain})")
-            return await self._quick_response(user_request)
+            return await self._quick_response(user_request, memory_context)
         
         # Moderate/Complex Path -> Leader Mode
         complexity_desc = "中等" if routing.complexity == TaskComplexity.MODERATE else "复杂"
@@ -533,15 +552,15 @@ class DynamicCoordinator:
             return fallback
         return None
 
-    async def _quick_response(self, question: str) -> str:
+    async def _quick_response(self, question: str, memory_context: str = "") -> str:
         # Simple task priority: Fast (Speed) -> Sonnet (Balance) -> Opus (Power)
         agent = self._get_agent_with_fallback([ModelRole.FAST, ModelRole.SONNET, ModelRole.OPUS])
-        
+
         if not agent:
             return "没有可用的模型来回答问题"
-        
+
         context = self._get_project_context()
-        
+
         system_prompt = f"""你是一个AI代码助手，可以帮助用户完成软件工程任务。
 
 你可以使用以下工具：
@@ -557,6 +576,8 @@ class DynamicCoordinator:
 当前工作目录: {self.working_dir}
 
 {context}
+
+{memory_context}
 """
         
         messages = [

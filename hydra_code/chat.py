@@ -187,7 +187,8 @@ class ChatSession:
         def on_update(status: str):
             pass
         
-        result = await self.coordinator.collaborate(user_input, on_update)
+        memory_context = self.memory.get_compact_history()
+        result = await self.coordinator.collaborate(user_input, on_update, memory_context=memory_context)
         
         console.print()
         console.print(Markdown(result))
@@ -316,14 +317,39 @@ class ChatSession:
     def _get_compact_messages(self) -> list[Message]:
         if len(self.messages) <= 10:
             return self.messages
-        
+
         system_msg = self.messages[0] if self.messages and self.messages[0].role == Role.SYSTEM else None
-        
-        recent = self.messages[-8:]
-        
-        if system_msg:
-            return [system_msg] + recent
-        return recent
+
+        compact_dicts = self.memory.get_context_for_model(max_tokens=4000)
+
+        result = []
+        seen_system = False
+        for d in compact_dicts:
+            role_str = d.get("role", "user")
+            try:
+                role = Role(role_str)
+            except ValueError:
+                role = Role.USER
+
+            msg = Message(
+                role=role,
+                content=d.get("content", ""),
+                tool_call_id=d.get("tool_call_id"),
+            )
+
+            tool_calls_data = d.get("tool_calls", [])
+            if tool_calls_data:
+                msg.tool_calls = tool_calls_data
+
+            if role == Role.SYSTEM:
+                seen_system = True
+
+            result.append(msg)
+
+        if system_msg and not seen_system:
+            result.insert(0, system_msg)
+
+        return result if result else self.messages[-8:]
 
     def _update_live(self, content: str, buffer: list[str], text_widget: Text, live: Live):
         buffer.append(content)

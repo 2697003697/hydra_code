@@ -100,7 +100,7 @@ class OpenAICompatibleClient(BaseClient):
         
         if self.enable_reasoning:
             # DeepSeek specific handling
-            if self.provider == "deepseek" or "deepseek" in self.base_url.lower():
+            if self.provider == "deepseek" or "api.deepseek.com" in self.base_url.lower():
                  kwargs["reasoning_effort"] = "high"
             # Generic thinking enabling (if supported by provider via extra_body)
             else:
@@ -157,7 +157,7 @@ class OpenAICompatibleClient(BaseClient):
             kwargs["tools"] = converted_tools
         
         # DeepSeek reasoning effort handling
-        if self.enable_reasoning and (self.provider == "deepseek" or "deepseek" in self.base_url.lower()):
+        if self.enable_reasoning and (self.provider == "deepseek" or "api.deepseek.com" in self.base_url.lower()):
              kwargs["reasoning_effort"] = "high"
 
         try:

@@ -1,6 +1,6 @@
 [project]
 name = "hydra-code"
-version = "0.2.0"
+version = "0.6.0"
 description = "Hydra Code - A Dynamic Multi-Model AI Coding Assistant"
 readme = "README.md"
 requires-python = ">=3.10"

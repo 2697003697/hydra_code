@@ -2,6 +2,62 @@
 
 所有重要变更将在此文件中记录。
 
+## [0.6.0] - 2026-05-11
+
+### 修复
+
+#### 1. Token 估算精度修复
+- **现象**: 中文内容 token 数被严重低估（公式按 4 字符/token 估算，中文实际 1-2 token/字符）
+- **修复**: 引入 `tiktoken` 精确计算，替换原来的 `len(content) // 4 + len(split)` 估算公式
+
+#### 2. 上下文系统并发安全
+- **现象**: 并行模式下多模型并发写入消息列表可能导致数据竞争
+- **修复**: 为 `ConversationMemory.add_message()` 添加 `threading.Lock` 保护
+
+#### 3. 孤立工具消息清理
+- **现象**: 上下文中残留没有对应 assistant 调用的 tool 消息，违反 API 协议
+- **修复**: `get_context_for_model()` 现在会检测并移除孤立的 tool 消息
+
+#### 4. 上下文压缩保留工具链
+- **现象**: 压缩旧消息时丢失 tool_calls 相关上下文，导致后续对话断裂
+- **修复**: 压缩时保留与 tool_call_id 关联的消息链
+
+#### 5. JSON 提取稳健性
+- **现象**: 路由分析时 JSON 解析失败（模型输出含前导文本或 Markdown 代码块）
+- **修复**: 使用括号深度计数替代贪婪正则提取，支持代码块和嵌套 JSON
+
+#### 6. DeepSeek Provider 判断修复
+- **现象**: 任意 URL 含 "deepseek" 子串都会触发 reasoning 模式
+- **修复**: 改为检查 `api.deepseek.com` 域名或显式 `provider == "deepseek"`
+
+#### 7. 路径穿越防护
+- **风险**: 文件工具可能被利用访问工作目录外的文件
+- **修复**: 所有 10 个文件工具添加 `_resolve_safe_path()` 校验，拒绝目录遍历
+
+#### 8. SSRF 防护
+- **风险**: `fetch_url` 工具可能被利用访问内网地址
+- **修复**: 添加 `_is_safe_url()` 检查，阻断 localhost、私有 IP、链路本地地址
+
+#### 9. 工具安全加固
+- **DownloadFileTool**: 修复 `base_dir` 未定义导致的 NameError
+- **DeleteFileTool**: 添加空路径和工作目录删除保护
+- **ReadFileTool**: 修复分页时 `total_lines` 计算错误
+- **EditFileTool**: 添加空 `old_content` 防护
+- **RunCommandTool**: `package_map` key 统一小写，`auto_install` 默认改为 False
+
+### 优化
+
+#### 1. Leader 模式可视化
+- **问题**: Leader 模式终端看起来像卡住，无进度反馈
+- **优化**: 新增 `LeaderMonitor` 持久面板，实时显示 Round 进度、Worker 状态、活动日志和耗时
+
+#### 2. Sequential 模式修复
+- **问题**: `LiveStreamSession` 缺少 `update_status` / `update_tool_status` 方法，Sequential 模式调用会崩溃
+- **优化**: 补全方法实现，修复 `async with` 误用
+
+#### 3. 路由分析 Token 预算
+- **优化**: `max_tokens` 从 150 提升至 300，避免 Fast/Pro 模型输出被截断导致 JSON 解析失败
+
 ## [0.5.0] - 2026-02-23
 
 ### 新增特性

@@ -141,8 +141,8 @@ class SequentialCollaborator:
         max_turns = 15
         
         from ..ui import LiveStreamSession
-        
-        async with LiveStreamSession(title="Executing Plan...") as session:
+
+        with LiveStreamSession() as session:
             for i in range(max_turns):
                 session.update_status(f"Turn {i+1}/{max_turns}")
                 
